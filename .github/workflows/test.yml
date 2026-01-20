@@ -1,0 +1,181 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: Build & Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --release -- -D warnings
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Upload binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: episteme-binary
+          path: target/release/episteme
+          retention-days: 1
+
+  e2e-test:
+    name: E2E Test (GSM8K)
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: episteme-binary
+          path: ./bin
+
+      - name: Make binary executable
+        run: chmod +x ./bin/episteme
+
+      - name: Create test config
+        run: |
+          cat > test_config.toml << 'EOF'
+          # episteme E2E test configuration - using FREE models
+          
+          [openrouter]
+          base_url = "https://openrouter.ai/api/v1"
+          timeout_secs = 120
+          max_retries = 3
+          
+          [workers]
+          size = 2
+          models = [
+              { id = "liquid/lfm-2.5-1.2b-thinking:free", label = "LFM-Think", weight = 1, input_price_per_1m = 0.0, output_price_per_1m = 0.0, max_tokens = 2048, temperature = 0.7 },
+          ]
+          
+          [judges]
+          size = 1
+          models = [
+              { id = "liquid/lfm-2.5-1.2b-instruct:free", label = "LFM-Judge", weight = 1, input_price_per_1m = 0.0, output_price_per_1m = 0.0, max_tokens = 1024, temperature = 0.3 },
+          ]
+          
+          [generation]
+          system_prompt = "prompts/system.md"
+          judge_prompt = "prompts/judge.md"
+          approval_threshold = 0.70
+          responses_per_problem = 2
+          
+          [output]
+          path = "test_output.jsonl"
+          include_rejected = true
+          track_costs = true
+          EOF
+
+      - name: Create test problems (GSM8K style)
+        run: |
+          cat > test_problems.jsonl << 'EOF'
+          {"id": "gsm8k_001", "input": "Janet's ducks lay 16 eggs per day. She eats three for breakfast every morning and bakes muffins for her friends every day with four. She sells the remainder at the farmers' market daily for $2 per fresh duck egg. How much in dollars does she make every day at the farmers' market?"}
+          {"id": "gsm8k_002", "input": "A robe takes 2 bolts of blue fiber and half that much white fiber. How many bolts in total does it take?"}
+          {"id": "gsm8k_003", "input": "Josh decides to try flipping a house. He buys a house for $80,000 and then puts in $50,000 in repairs. This increased the value of the house by 150%. How much profit did he make?"}
+          EOF
+
+      - name: Run SFT pipeline
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        run: |
+          ./bin/episteme sft \
+            -c test_config.toml \
+            -p test_problems.jsonl \
+            -o test_output.jsonl \
+            --verbose
+
+      - name: Validate output
+        run: |
+          echo "=== Output Validation ==="
+          
+          # Check file exists and has content
+          if [ ! -s test_output.jsonl ]; then
+            echo "ERROR: Output file is empty or missing"
+            exit 1
+          fi
+          
+          # Count samples
+          SAMPLE_COUNT=$(wc -l < test_output.jsonl)
+          echo "Samples generated: $SAMPLE_COUNT"
+          
+          if [ "$SAMPLE_COUNT" -lt 1 ]; then
+            echo "ERROR: No samples generated"
+            exit 1
+          fi
+          
+          # Validate JSON structure
+          echo "Validating JSON structure..."
+          cat test_output.jsonl | while read line; do
+            echo "$line" | jq -e '.' > /dev/null || { echo "ERROR: Invalid JSON"; exit 1; }
+          done
+          echo "✓ All lines are valid JSON"
+          
+          # Check required fields
+          echo "Checking required fields..."
+          REQUIRED_FIELDS="id input output model score problem_id tokens_in tokens_out verdict quality_flags"
+          for field in $REQUIRED_FIELDS; do
+            MISSING=$(cat test_output.jsonl | jq -r "select(.$field == null) | .id" | head -1)
+            if [ -n "$MISSING" ]; then
+              echo "ERROR: Missing field '$field' in sample $MISSING"
+              exit 1
+            fi
+          done
+          echo "✓ All required fields present"
+          
+          # Check quality flags structure
+          echo "Checking quality_flags structure..."
+          cat test_output.jsonl | jq -e '.quality_flags | has("truncated") and has("has_answer_tags") and has("has_reasoning")' > /dev/null || {
+            echo "ERROR: Invalid quality_flags structure"
+            exit 1
+          }
+          echo "✓ Quality flags structure valid"
+          
+          # Summary
+          echo ""
+          echo "=== Test Summary ==="
+          cat test_output.jsonl | jq -r '"Problem: \(.problem_id) | Score: \(.score) | Verdict: \(.verdict) | Truncated: \(.quality_flags.truncated)"'
+
+      - name: Upload test output
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-output
+          path: test_output.jsonl
+          retention-days: 7
