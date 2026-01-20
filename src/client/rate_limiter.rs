@@ -145,40 +145,33 @@ impl ModelRateLimitState {
     pub fn update_from_headers(&mut self, headers: &reqwest::header::HeaderMap) {
         let now = Instant::now();
 
+        // Helper to parse header value
+        let parse_header = |headers: &reqwest::header::HeaderMap, key: &str| -> Option<String> {
+            headers.get(key)?.to_str().ok().map(|s| s.to_string())
+        };
+
         // Parse rate limit headers
-        if let Some(v) = headers.get("x-ratelimit-limit-requests") {
-            if let Ok(s) = v.to_str() {
-                self.limit_requests = s.parse().ok();
-            }
+        if let Some(s) = parse_header(headers, "x-ratelimit-limit-requests") {
+            self.limit_requests = s.parse().ok();
         }
-        if let Some(v) = headers.get("x-ratelimit-limit-tokens") {
-            if let Ok(s) = v.to_str() {
-                self.limit_tokens = s.parse().ok();
-            }
+        if let Some(s) = parse_header(headers, "x-ratelimit-limit-tokens") {
+            self.limit_tokens = s.parse().ok();
         }
-        if let Some(v) = headers.get("x-ratelimit-remaining-requests") {
-            if let Ok(s) = v.to_str() {
-                self.remaining_requests = s.parse().ok();
-            }
+        if let Some(s) = parse_header(headers, "x-ratelimit-remaining-requests") {
+            self.remaining_requests = s.parse().ok();
         }
-        if let Some(v) = headers.get("x-ratelimit-remaining-tokens") {
-            if let Ok(s) = v.to_str() {
-                self.remaining_tokens = s.parse().ok();
-            }
+        if let Some(s) = parse_header(headers, "x-ratelimit-remaining-tokens") {
+            self.remaining_tokens = s.parse().ok();
         }
-        if let Some(v) = headers.get("x-ratelimit-reset-requests") {
-            if let Ok(s) = v.to_str() {
-                if let Ok(secs) = s.parse::<f64>() {
-                    self.reset_requests_at = Some(now + Duration::from_secs_f64(secs));
-                }
-            }
+        if let Some(secs) =
+            parse_header(headers, "x-ratelimit-reset-requests").and_then(|s| s.parse::<f64>().ok())
+        {
+            self.reset_requests_at = Some(now + Duration::from_secs_f64(secs));
         }
-        if let Some(v) = headers.get("x-ratelimit-reset-tokens") {
-            if let Ok(s) = v.to_str() {
-                if let Ok(secs) = s.parse::<f64>() {
-                    self.reset_tokens_at = Some(now + Duration::from_secs_f64(secs));
-                }
-            }
+        if let Some(secs) =
+            parse_header(headers, "x-ratelimit-reset-tokens").and_then(|s| s.parse::<f64>().ok())
+        {
+            self.reset_tokens_at = Some(now + Duration::from_secs_f64(secs));
         }
 
         self.last_updated = now;

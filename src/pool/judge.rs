@@ -105,45 +105,50 @@ Please evaluate this sample according to the criteria and provide:
 
     /// Parse score from judge response.
     fn parse_score(content: &str) -> Option<f64> {
-        // Try various patterns for score extraction
+        // Helper to extract score from captures
+        let extract_score = |re: &Regex, content: &str| -> Option<f64> {
+            re.captures(content)?
+                .get(1)?
+                .as_str()
+                .parse::<f64>()
+                .ok()
+                .map(|s| s.clamp(0.0, 1.0))
+        };
 
         // Pattern: "Score: 0.85" or "score: 0.85"
-        let re = Regex::new(r"[Ss]core[:\s]+(\d+\.?\d*)").ok()?;
-        if let Some(captures) = re.captures(content) {
-            if let Some(score) = captures.get(1).and_then(|s| s.as_str().parse::<f64>().ok()) {
-                return Some(score.clamp(0.0, 1.0));
-            }
+        if let Some(score) = Regex::new(r"[Ss]core[:\s]+(\d+\.?\d*)")
+            .ok()
+            .and_then(|re| extract_score(&re, content))
+        {
+            return Some(score);
         }
 
         // Pattern: "**Score:** 0.85"
-        let re = Regex::new(r"\*\*[Ss]core\*\*[:\s]+(\d+\.?\d*)").ok()?;
-        if let Some(captures) = re.captures(content) {
-            if let Some(score) = captures.get(1).and_then(|s| s.as_str().parse::<f64>().ok()) {
-                return Some(score.clamp(0.0, 1.0));
-            }
+        if let Some(score) = Regex::new(r"\*\*[Ss]core\*\*[:\s]+(\d+\.?\d*)")
+            .ok()
+            .and_then(|re| extract_score(&re, content))
+        {
+            return Some(score);
         }
 
         // Pattern: "Overall score: 0.85"
-        let re = Regex::new(r"[Oo]verall\s+[Ss]core[:\s]+(\d+\.?\d*)").ok()?;
-        if let Some(captures) = re.captures(content) {
-            if let Some(score) = captures.get(1).and_then(|s| s.as_str().parse::<f64>().ok()) {
-                return Some(score.clamp(0.0, 1.0));
-            }
+        if let Some(score) = Regex::new(r"[Oo]verall\s+[Ss]core[:\s]+(\d+\.?\d*)")
+            .ok()
+            .and_then(|re| extract_score(&re, content))
+        {
+            return Some(score);
         }
 
         // Fallback: look for any decimal between 0 and 1
         let re = Regex::new(r"(0\.\d+|1\.0)").ok()?;
-        for captures in re.captures_iter(content) {
-            if let Some(score) = captures
-                .get(1)
-                .and_then(|s| s.as_str().parse::<f64>().ok())
+        re.captures_iter(content).find_map(|captures| {
+            captures
+                .get(1)?
+                .as_str()
+                .parse::<f64>()
+                .ok()
                 .filter(|&s| (0.0..=1.0).contains(&s))
-            {
-                return Some(score);
-            }
-        }
-
-        None
+        })
     }
 
     /// Parse verdict from judge response.
