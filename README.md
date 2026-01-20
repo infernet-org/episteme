@@ -1,54 +1,84 @@
 # episteme
 
+> *"Make the implicit explicit. Verify before trusting. Compound always."*
+
+[![CI](https://github.com/infernet-org/episteme/actions/workflows/test.yml/badge.svg)](https://github.com/infernet-org/episteme/actions/workflows/test.yml)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
 Epistemic dataset generation for RL training via OpenRouter.
+
+## Epistemic Foundation
+
+`episteme` is built on the principle that **training data quality depends on what we know, believe, and don't know** about each sample. The tool makes these epistemic states explicit:
+
+| State | Symbol | Meaning | In episteme |
+|-------|--------|---------|-------------|
+| **Knowledge** | K_i | Verified fact | Score from judge, token counts, model used |
+| **Belief** | B_i | Unverified assumption | Quality flags (has_reasoning, self_correction) |
+| **Ignorance** | I_i | Known unknown | Missing answer extraction, truncation detection |
+
+Every generated sample carries epistemic metadata that enables downstream filtering, analysis, and trust calibration.
 
 ## Overview
 
-`episteme` is a Rust CLI tool for generating training datasets using frontier LLMs. It's **RL-agnostic** — the generated data can be used for:
+`episteme` is a Rust CLI tool for generating training datasets using frontier LLMs. It's **RL-agnostic** - the generated data can be used for any training method:
 
 | Method | Data Format | episteme Support |
-|--------|-------------|----------------|
-| **SFT** | `(prompt, completion)` | ✅ `episteme sft` |
-| **DPO/IPO** | `(prompt, chosen, rejected)` | ✅ `episteme dpo` |
-| **RLHF/PPO** | `(prompt, completion, reward)` | ✅ Use SFT output (score = reward) |
-| **GRPO** | `(prompt, completions[], scores[])` | ✅ Use DPO with N responses |
-| **KTO** | `(prompt, completion, label)` | ✅ Threshold SFT scores |
+|--------|-------------|------------------|
+| **SFT** | `(prompt, completion)` | `episteme sft` |
+| **DPO/IPO** | `(prompt, chosen, rejected)` | `episteme dpo` |
+| **RLHF/PPO** | `(prompt, completion, reward)` | SFT output (score = reward) |
+| **GRPO** | `(prompt, completions[], scores[])` | DPO with N responses |
+| **KTO** | `(prompt, completion, label)` | Threshold SFT scores |
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        episteme                                     │
-│                                                                     │
-│  ┌─────────────┐      problems       ┌─────────────┐                │
-│  │   Input     │────────────────────►│   Worker    │                │
-│  │  (JSONL)    │                     │   Pool      │                │
-│  └─────────────┘                     │  (tokio)    │                │
-│                                      └──────┬──────┘                │
-│                                             │ samples               │
-│                                             ▼                       │
-│                                      ┌─────────────┐                │
-│                                      │   Judge     │                │
-│                                      │   Pool      │                │
-│                                      │  (tokio)    │                │
-│                                      └──────┬──────┘                │
-│                                             │ scored                │
-│                                             ▼                       │
-│  ┌─────────────┐                     ┌─────────────┐                │
-│  │   Output    │◄────────────────────│  Curator    │                │
-│  │  (JSONL)    │      SFT/DPO        │  (filter,   │                │
-│  └─────────────┘                     │   pair)     │                │
-│                                      └─────────────┘                │
-└─────────────────────────────────────────────────────────────────────┘
+                              EPISTEMIC DATA FLOW
+                              
+  ┌─────────────────────────────────────────────────────────────────────┐
+  │                            episteme                                  │
+  │                                                                      │
+  │  ┌─────────────┐                          ┌─────────────────────┐   │
+  │  │   Input     │  K_i: problem exists     │      Worker         │   │
+  │  │  (JSONL)    │ ─────────────────────────│       Pool          │   │
+  │  │             │  I_i: output quality     │     (tokio)         │   │
+  │  └─────────────┘                          └──────────┬──────────┘   │
+  │                                                      │              │
+  │                                    samples + B_i(quality)           │
+  │                                                      ▼              │
+  │                                           ┌─────────────────────┐   │
+  │                                           │       Judge         │   │
+  │                                           │        Pool         │   │
+  │                                           │      (tokio)        │   │
+  │                                           └──────────┬──────────┘   │
+  │                                                      │              │
+  │                                      scored + K_i(verdict)          │
+  │                                                      ▼              │
+  │  ┌─────────────┐                          ┌─────────────────────┐   │
+  │  │   Output    │  K_i: score, tokens      │      Curator        │   │
+  │  │  (JSONL)    │ ◄────────────────────────│   (filter, pair)    │   │
+  │  │             │  B_i: quality_flags      └─────────────────────┘   │
+  │  └─────────────┘                                                    │
+  └─────────────────────────────────────────────────────────────────────┘
 ```
 
-**Key features:**
-- **Multi-model routing**: Use different models for generation (weighted selection)
-- **LLM-as-judge**: Automatic quality scoring with configurable judge models
-- **Checkpointing**: Resume interrupted runs
-- **Rate limiting**: Per-model rate limiting with backoff
-- **Cost tracking**: Monitor API costs in real-time
-- **Epistemic metadata**: Quality flags for truncation, reasoning, self-correction
+### Epistemic Properties
+
+- **K_i (Known)**: Token counts, generation time, model identity, judge score, verdict
+- **B_i (Believed)**: Quality flags inferred from output patterns (truncation, reasoning)  
+- **I_i (Unknown)**: Answer correctness (requires ground truth), long-term training impact
+
+## Key Features
+
+| Feature | Epistemic Basis | Benefit |
+|---------|-----------------|---------|
+| **Multi-model routing** | K_i(model capabilities) | Weighted selection based on known strengths |
+| **LLM-as-judge** | B_i → K_i transition | Convert quality assumptions to verified scores |
+| **Quality flags** | B_i(output analysis) | Surface patterns: truncation, reasoning, self-correction |
+| **Checkpointing** | K_i(progress state) | Resume with known-good state |
+| **Rate limiting** | K_i(API limits) | Adaptive backoff from observed 429s |
+| **Cost tracking** | K_i(token usage) | Real-time cost visibility |
 
 ## Installation
 
@@ -64,7 +94,7 @@ cargo build --release
 ## Quick Start
 
 ```bash
-# Set your API key
+# Set your API key (K_i: authentication configured)
 export OPENROUTER_API_KEY="sk-or-..."
 
 # Generate SFT data
@@ -81,51 +111,15 @@ episteme dpo \
   --responses 3
 ```
 
-## Usage
-
-### SFT Generation
-
-Generate high-quality completions with judge filtering:
-
-```bash
-episteme sft \
-  --config config.toml \
-  --problems problems.jsonl \
-  --output sft_dataset.jsonl
-```
-
-### DPO Generation
-
-Generate preference pairs (chosen vs rejected):
-
-```bash
-episteme dpo \
-  --config config.toml \
-  --problems problems.jsonl \
-  --output dpo_dataset.jsonl \
-  --responses 3  # Generate 3 responses per problem, pair best vs worst
-```
-
-### Other Commands
-
-```bash
-# Validate configuration
-episteme --config config.toml validate
-
-# Show example configuration
-episteme example
-```
-
 ## Configuration
 
-See `config/example.toml` for a complete example.
-
 ```toml
+# K_i: API configuration (verified on first request)
 [openrouter]
-# API key (or set OPENROUTER_API_KEY env var)
 timeout_secs = 180
 max_retries = 3
 
+# K_i: Worker configuration
 [workers]
 size = 10  # Concurrent generation workers
 models = [
@@ -133,31 +127,26 @@ models = [
     { id = "anthropic/claude-sonnet-4", weight = 1 },
 ]
 
+# K_i: Judge configuration  
 [judges]
 size = 5  # Concurrent judge workers
 models = [
     { id = "openai/gpt-4o", temperature = 0.3 },
 ]
 
+# B_i: Generation parameters (tune based on observed quality)
 [generation]
-system_prompt = "prompts/system.md"    # Your system prompt
-judge_prompt = "prompts/judge.md"      # Your judge prompt
-approval_threshold = 0.85               # Minimum score to approve
-responses_per_problem = 3               # For DPO: responses to compare
+system_prompt = "prompts/system.md"
+judge_prompt = "prompts/judge.md"
+approval_threshold = 0.85    # Threshold for B_i → K_i(approved)
+responses_per_problem = 3    # For DPO: responses to compare
 
 [output]
 path = "output/dataset.jsonl"
 track_costs = true
 ```
 
-### Prompts
-
-You provide your own prompts — episteme doesn't assume any specific format. Example prompts are included in `prompts/examples/`:
-
-- `system-reasoning.md` - Chain-of-thought reasoning prompt
-- `judge-correctness.md` - Quality scoring prompt
-
-Customize these for your use case (math, code, reasoning, etc.).
+See `config/example.toml` for a complete example.
 
 ## Input Format
 
@@ -168,13 +157,11 @@ Problems JSONL:
 {"id": "prob_003", "input": "Write a function to reverse a string."}
 ```
 
-See `examples/problems.jsonl` for more examples across domains.
+## Output Schema
 
-## Output Formats
+### SFT Output (Epistemic Sample)
 
-### SFT Output
-
-Each sample includes full metadata for traceability, quality analysis, and debugging:
+Each sample carries full epistemic metadata:
 
 ```jsonl
 {
@@ -202,37 +189,40 @@ Each sample includes full metadata for traceability, quality analysis, and debug
 }
 ```
 
-#### Field Reference
+### Field Reference (K_i: Verified Facts)
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `id` | string | Unique sample identifier |
-| `input` | string | Original problem/prompt |
-| `output` | string | Generated response |
-| `answer` | string? | Extracted final answer (if parseable) |
-| `model` | string | Model used for generation |
-| `score` | float | Quality score from judge (0.0-1.0) |
-| `problem_id` | string | Source problem ID for tracing |
-| `tokens_in` | int | Input tokens consumed |
-| `tokens_out` | int | Output tokens generated |
-| `judge_reasoning` | string? | Judge's explanation for the score |
-| `generation_time_ms` | int | Generation latency in milliseconds |
-| `judge_model` | string | Model used for judging |
-| `verdict` | string | `"approve"` or `"reject"` |
-| `quality_flags` | object | Epistemic quality signals (see below) |
-| `cost_usd` | float? | Total cost (generation + judging) |
+| Field | Type | Epistemic State | Description |
+|-------|------|-----------------|-------------|
+| `id` | string | K_i | Unique sample identifier |
+| `input` | string | K_i | Original problem/prompt |
+| `output` | string | K_i | Generated response |
+| `model` | string | K_i | Model used for generation |
+| `score` | float | K_i | Quality score from judge (0.0-1.0) |
+| `problem_id` | string | K_i | Source problem ID for tracing |
+| `tokens_in` | int | K_i | Input tokens consumed |
+| `tokens_out` | int | K_i | Output tokens generated |
+| `generation_time_ms` | int | K_i | Generation latency |
+| `judge_model` | string | K_i | Model used for judging |
+| `verdict` | string | K_i | `"approve"` or `"reject"` |
+| `cost_usd` | float? | K_i | Total cost (generation + judging) |
 
-#### Quality Flags
+### Field Reference (B_i: Inferred Beliefs)
 
-| Flag | Type | Description |
-|------|------|-------------|
-| `truncated` | bool | Output appears cut off mid-sentence |
-| `has_answer_tags` | bool | Contains `<answer>`, `\boxed{}`, etc. |
-| `has_reasoning` | bool | Contains reasoning steps (EAE phases, "Step 1", etc.) |
-| `self_correction` | bool | Contains "Wait", "Actually", self-correction patterns |
-| `reasoning_length` | int | Character count of reasoning content |
+| Field | Type | Confidence | Description |
+|-------|------|------------|-------------|
+| `answer` | string? | MED | Extracted final answer (pattern-based) |
+| `judge_reasoning` | string? | HIGH | Judge's explanation (LLM output) |
+| `quality_flags` | object | MED | Heuristic quality signals |
 
-**Use for**: SFT training, RLHF (score as reward), KTO (threshold score), quality filtering
+### Quality Flags (B_i: Pattern-Based Inference)
+
+| Flag | Type | Detection Method | Confidence |
+|------|------|------------------|------------|
+| `truncated` | bool | Last char not terminal punctuation | MED |
+| `has_answer_tags` | bool | Contains `<answer>`, `\boxed{}`, etc. | HIGH |
+| `has_reasoning` | bool | Contains "Step 1", "Let's think", etc. | HIGH |
+| `self_correction` | bool | Contains "Wait", "Actually", etc. | HIGH |
+| `reasoning_length` | int | Chars before answer tag | K_i |
 
 ### DPO Output
 
@@ -250,32 +240,84 @@ Each sample includes full metadata for traceability, quality analysis, and debug
 }
 ```
 
-**Use for**: DPO, IPO, any preference-based method
+## Epistemic Filtering
 
-## Examples
+Use metadata to filter based on epistemic confidence:
 
-### Using with TRL (Transformers RL)
+```python
+import json
+
+def load_high_confidence_samples(path, min_score=0.9):
+    """
+    Load samples where:
+    - K_i(score >= threshold) - verified quality
+    - B_i(not truncated) - believed complete
+    - B_i(has_reasoning) - believed to show work
+    """
+    samples = []
+    with open(path) as f:
+        for line in f:
+            sample = json.loads(line)
+            # K_i: score is verified by judge
+            if sample["score"] < min_score:
+                continue
+            # B_i: quality flags are inferred
+            flags = sample["quality_flags"]
+            if flags["truncated"]:
+                continue  # I_i: unknown how output would end
+            if not flags["has_reasoning"]:
+                continue  # B_i: may lack chain-of-thought
+            samples.append(sample)
+    return samples
+
+def partition_by_confidence(path):
+    """
+    Partition samples by epistemic confidence.
+    
+    Returns:
+        high_k: K_i(high score) AND B_i(good flags)
+        med_b:  K_i(ok score) OR B_i(some flags missing)  
+        low_i:  I_i(truncated) OR K_i(low score)
+    """
+    high_k, med_b, low_i = [], [], []
+    with open(path) as f:
+        for line in f:
+            s = json.loads(line)
+            flags = s["quality_flags"]
+            
+            if flags["truncated"]:
+                low_i.append(s)  # I_i: incomplete
+            elif s["score"] >= 0.9 and flags["has_reasoning"]:
+                high_k.append(s)  # High confidence
+            elif s["score"] >= 0.7:
+                med_b.append(s)  # Medium confidence
+            else:
+                low_i.append(s)  # Low confidence
+    return high_k, med_b, low_i
+```
+
+## Integration Examples
+
+### TRL (Transformers RL)
 
 ```python
 from datasets import load_dataset
 from trl import DPOTrainer
 
-# Load episteme output
+# K_i: episteme output format matches TRL expectations
 dataset = load_dataset("json", data_files="dpo_dataset.jsonl")
 
-# Train with TRL
 trainer = DPOTrainer(
     model=model,
     ref_model=ref_model,
     train_dataset=dataset["train"],
-    # episteme format matches TRL expectations
 )
 ```
 
-### Using with Axolotl
+### Axolotl
 
 ```yaml
-# axolotl config
+# B_i: field mapping should work (verify with your version)
 datasets:
   - path: sft_dataset.jsonl
     type: completion
@@ -284,50 +326,19 @@ datasets:
       completion: output
 ```
 
-### Filtering with Quality Flags
-
-Use the metadata to filter high-quality samples:
-
-```python
-import json
-
-def load_high_quality_samples(path, min_score=0.9):
-    """Load only high-quality, non-truncated samples."""
-    samples = []
-    with open(path) as f:
-        for line in f:
-            sample = json.loads(line)
-            # Filter by score and quality flags
-            if (sample["score"] >= min_score 
-                and not sample["quality_flags"]["truncated"]
-                and sample["quality_flags"]["has_reasoning"]):
-                samples.append(sample)
-    return samples
-
-# Filter for samples with self-correction (shows deeper reasoning)
-def get_self_correcting_samples(path):
-    samples = []
-    with open(path) as f:
-        for line in f:
-            sample = json.loads(line)
-            if sample["quality_flags"]["self_correction"]:
-                samples.append(sample)
-    return samples
-```
-
 ### Cost Analysis
 
 ```python
-import json
-
 def analyze_costs(path):
-    """Analyze generation costs by model."""
+    """
+    K_i: Analyze verified costs by model.
+    """
     costs_by_model = {}
     with open(path) as f:
         for line in f:
             sample = json.loads(line)
-            model = sample["model"]
-            cost = sample.get("cost_usd", 0)
+            model = sample["model"]  # K_i: known
+            cost = sample.get("cost_usd", 0)  # K_i: tracked
             if model not in costs_by_model:
                 costs_by_model[model] = {"count": 0, "total_cost": 0}
             costs_by_model[model]["count"] += 1
@@ -335,10 +346,21 @@ def analyze_costs(path):
     return costs_by_model
 ```
 
-## Environment Variables
+## Epistemic Horizon
 
-- `OPENROUTER_API_KEY`: API key for OpenRouter (required if not in config)
-- `RUST_LOG`: Set log level (e.g., `RUST_LOG=debug`)
+Some things are **knowable** (I^R) and some are **bounded** (I^B):
+
+| Aspect | Status | Action |
+|--------|--------|--------|
+| Token count | K_i | Tracked precisely |
+| Generation time | K_i | Measured |
+| Judge score | K_i | Verified by judge model |
+| Answer correctness | I^R | Resolvable with ground truth |
+| Truncation | B_i | Inferred from patterns |
+| Training impact | I^B | Bounded (unknowable until trained) |
+| Future model behavior | I^B | Bounded (fundamentally uncertain) |
+
+**Design principle**: episteme maximizes K_i and B_i while making I_i explicit. It does not claim to know the unknowable.
 
 ## Project Structure
 
@@ -348,19 +370,40 @@ episteme/
 │   ├── main.rs           # CLI entry point
 │   ├── lib.rs            # Library exports
 │   ├── client/           # OpenRouter client + rate limiter
+│   │   └── rate_limiter.rs  # K_i: Per-model rate limit tracking
 │   ├── models/           # Config, sample, error types
+│   │   ├── sample.rs     # Epistemic sample schema
+│   │   └── error.rs      # EpistemeError taxonomy
 │   ├── pipeline/         # DPO + SFT generation pipelines
 │   ├── pool/             # Worker + judge pools
-│   └── checkpoint/       # Resume support
+│   │   └── judge.rs      # B_i → K_i: Score verification
+│   └── checkpoint/       # Resume support (K_i persistence)
 ├── config/
 │   └── example.toml      # Example configuration
 ├── prompts/
 │   └── examples/         # Example prompts
-├── examples/
-│   └── problems.jsonl    # Sample problems
+├── test/
+│   ├── config.toml       # Test configuration
+│   └── problems.jsonl    # Test problems
 └── Cargo.toml
 ```
+
+## Environment Variables
+
+| Variable | Purpose | Epistemic Note |
+|----------|---------|----------------|
+| `OPENROUTER_API_KEY` | API authentication | K_i after first successful request |
+| `RUST_LOG` | Log verbosity | Set to `debug` for full K_i visibility |
+
+## Related Projects
+
+- **[EAE](https://github.com/infernet-org/eae)** - Epistemic Agentic Engineering framework (methodology source)
+- **[eae-skills](https://github.com/infernet-org/eae-skills)** - OpenCode skills for epistemic reasoning
 
 ## License
 
 Apache-2.0
+
+---
+
+**K_i: This tool generates training data. B_i: The data is high quality. I_i: Training outcomes depend on your model and method.**
