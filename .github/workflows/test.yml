@@ -140,11 +140,21 @@ jobs:
             exit 1
           fi
           
-          # Validate JSON structure
+          # Validate JSON structure (line by line with diagnostics)
           echo "Validating JSON structure..."
-          cat test_output.jsonl | while read line; do
-            echo "$line" | jq -e '.' > /dev/null || { echo "ERROR: Invalid JSON"; exit 1; }
-          done
+          LINE_NUM=0
+          while IFS= read -r line; do
+            LINE_NUM=$((LINE_NUM + 1))
+            if ! echo "$line" | jq -e '.' > /dev/null 2>&1; then
+              echo "ERROR: Invalid JSON on line $LINE_NUM"
+              echo "Line length: ${#line} characters"
+              echo "First 500 chars: ${line:0:500}"
+              echo "Last 500 chars: ${line: -500}"
+              # Try to find the error position
+              echo "$line" | jq '.' 2>&1 || true
+              exit 1
+            fi
+          done < test_output.jsonl
           echo "✓ All lines are valid JSON"
           
           # Check required fields
