@@ -10,8 +10,8 @@ use crate::client::OpenRouterClient;
 use crate::models::{DpogenError, ModelSpec, Problem, Result, Sample};
 use chrono::Utc;
 use regex::Regex;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 use tokio::sync::Semaphore;
 use tracing::warn;
@@ -145,10 +145,7 @@ impl WorkerPool {
     /// Generate samples for multiple problems in parallel.
     ///
     /// Returns (successful_samples, failed_problem_ids)
-    pub async fn generate_batch(
-        &self,
-        problems: Vec<Problem>,
-    ) -> (Vec<Sample>, Vec<String>) {
+    pub async fn generate_batch(&self, problems: Vec<Problem>) -> (Vec<Sample>, Vec<String>) {
         let mut handles = Vec::with_capacity(problems.len());
 
         for problem in problems {

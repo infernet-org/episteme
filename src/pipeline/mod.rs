@@ -1,7 +1,7 @@
 //! Pipeline module - SFT and DPO data generation pipelines.
 
-mod sft;
 mod dpo;
+mod sft;
 
-pub use sft::*;
 pub use dpo::*;
+pub use sft::*;

@@ -180,11 +180,15 @@ impl Config {
     /// B_i(file exists) → Result
     /// B_i(file is valid TOML) → Result
     pub fn from_file(path: &std::path::Path) -> Result<Self, ConfigError> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| ConfigError::FileRead { path: path.to_owned(), source: e })?;
-        
-        toml::from_str(&content)
-            .map_err(|e| ConfigError::Parse { path: path.to_owned(), source: e })
+        let content = std::fs::read_to_string(path).map_err(|e| ConfigError::FileRead {
+            path: path.to_owned(),
+            source: e,
+        })?;
+
+        toml::from_str(&content).map_err(|e| ConfigError::Parse {
+            path: path.to_owned(),
+            source: e,
+        })
     }
 
     /// Resolve API key from config or environment.
@@ -195,8 +199,7 @@ impl Config {
             return Ok(key.clone());
         }
 
-        std::env::var("OPENROUTER_API_KEY")
-            .map_err(|_| ConfigError::MissingApiKey)
+        std::env::var("OPENROUTER_API_KEY").map_err(|_| ConfigError::MissingApiKey)
     }
 }
 

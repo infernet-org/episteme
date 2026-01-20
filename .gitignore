@@ -1,1 +1,52 @@
+# Build artifacts
 /target
+/dist
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment and secrets
+.env
+.env.*
+*.env
+.envrc
+secrets/
+credentials/
+
+# Config files with potential secrets
+config.toml
+!config/example.toml
+
+# Test outputs and artifacts
+/test/
+/output/
+*.jsonl
+!examples/*.jsonl
+
+# Checkpoints (may contain state)
+/checkpoints/
+checkpoint*.json
+
+# Logs
+*.log
+logs/
+
+# Coverage and profiling
+*.profraw
+*.profdata
+coverage/
+tarpaulin-report.html
+
+# OS files
+Thumbs.db
+.Spotlight-V100
+.Trashes
+
+# Rust specific
+**/*.rs.bk
+Cargo.lock

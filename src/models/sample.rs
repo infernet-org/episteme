@@ -2,8 +2,8 @@
 //!
 //! K_i: These types represent the core data flow through the pipeline.
 
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// Input problem for generation.
 ///
@@ -107,11 +107,99 @@ pub struct JudgeResult {
     pub judge_cost_usd: f64,
 }
 
+/// Quality flags for epistemic analysis of generated samples.
+///
+/// K_i: These flags capture quality signals beyond the score.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QualityFlags {
+    /// Output appears truncated (cut off mid-sentence/word)
+    pub truncated: bool,
+
+    /// Contains structured answer tags (<answer>, ## Answer, etc.)
+    pub has_answer_tags: bool,
+
+    /// Contains reasoning/thinking steps
+    pub has_reasoning: bool,
+
+    /// Contains self-correction patterns ("Wait", "Actually", "Let me reconsider")
+    pub self_correction: bool,
+
+    /// Length of reasoning content in characters
+    pub reasoning_length: usize,
+}
+
+impl QualityFlags {
+    /// Analyze output content and compute quality flags.
+    pub fn from_output(output: &str) -> Self {
+        let trimmed = output.trim();
+
+        // Check for truncation: ends mid-word, mid-sentence, or with incomplete patterns
+        let truncated = {
+            let last_char = trimmed.chars().last().unwrap_or('.');
+            let ends_incomplete = !matches!(
+                last_char,
+                '.' | '!' | '?' | ')' | ']' | '}' | '"' | '\'' | '>' | '*'
+            );
+            let ends_with_incomplete_pattern = trimmed.ends_with("...")
+                || trimmed.ends_with(" -")
+                || trimmed.ends_with(" =")
+                || trimmed.ends_with("Wait")
+                || trimmed.ends_with("Actually");
+            ends_incomplete || ends_with_incomplete_pattern
+        };
+
+        // Check for answer tags
+        let has_answer_tags = output.contains("<answer>")
+            || output.contains("</answer>")
+            || output.contains("## Answer")
+            || output.contains("**Answer**")
+            || output.contains("\\boxed{");
+
+        // Check for reasoning indicators
+        let has_reasoning = output.contains("## OBSERVE")
+            || output.contains("### OBSERVE")
+            || output.contains("K_i")
+            || output.contains("B_i")
+            || output.contains("<reasoning>")
+            || output.contains("Step 1")
+            || output.contains("First,")
+            || output.contains("Let's think")
+            || output.contains("Let me");
+
+        // Check for self-correction patterns
+        let self_correction = output.contains("Wait")
+            || output.contains("Actually")
+            || output.contains("Let me reconsider")
+            || output.contains("I made a mistake")
+            || output.contains("Correction:")
+            || output.contains("On second thought");
+
+        // Measure reasoning length (approximate: content before answer)
+        let reasoning_length = if let Some(pos) = output.find("<answer>") {
+            pos
+        } else if let Some(pos) = output.find("## Answer") {
+            pos
+        } else {
+            output.len()
+        };
+
+        Self {
+            truncated,
+            has_answer_tags,
+            has_reasoning,
+            self_correction,
+            reasoning_length,
+        }
+    }
+}
+
 /// SFT output sample (approved sample for supervised fine-tuning).
 ///
-/// K_i: SFT sample is an approved sample with all metadata.
+/// K_i: SFT sample is an approved sample with full metadata for training and analysis.
+/// Enhanced with epistemic metadata for quality analysis and traceability.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SftSample {
+    // === Core Fields ===
     /// Unique identifier
     pub id: String,
 
@@ -128,28 +216,80 @@ pub struct SftSample {
     /// Model used for generation
     pub model: String,
 
-    /// Quality score from judge
+    /// Quality score from judge (0.0 - 1.0)
     pub score: f64,
 
-    /// Total cost (generation + judging)
+    // === P0: Traceability (HIGH priority) ===
+    /// Source problem ID for tracing back to input
+    pub problem_id: String,
+
+    /// Input tokens used for generation
+    pub tokens_in: u32,
+
+    /// Output tokens generated
+    pub tokens_out: u32,
+
+    /// Judge's reasoning/explanation for the score
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_reasoning: Option<String>,
+
+    // === P1: Efficiency & Provenance (MEDIUM priority) ===
+    /// Generation time in milliseconds
+    pub generation_time_ms: u64,
+
+    /// Model used for judging
+    pub judge_model: String,
+
+    /// Explicit verdict from judge
+    pub verdict: Verdict,
+
+    // === P2: Quality Signals (Epistemic) ===
+    /// Quality flags for epistemic analysis
+    pub quality_flags: QualityFlags,
+
+    // === Cost & Metadata ===
+    /// Total cost (generation + judging) in USD
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cost_usd: Option<f64>,
 
-    /// Optional metadata
+    /// Optional metadata from problem
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub metadata: serde_json::Value,
 }
 
 impl SftSample {
     /// Create an SFT sample from a sample and judge result.
+    ///
+    /// K_i: Preserves all metadata from generation and judging phases.
+    /// This enables full traceability and epistemic analysis.
     pub fn from_judged(sample: Sample, judge: JudgeResult, include_cost: bool) -> Self {
+        // Compute quality flags from output
+        let quality_flags = QualityFlags::from_output(&sample.output);
+
         Self {
+            // Core fields
             id: sample.id,
-            input: sample.input,
+            input: sample.input.clone(),
             output: sample.output,
             answer: sample.answer,
             model: sample.model,
             score: judge.score,
+
+            // P0: Traceability
+            problem_id: sample.problem_id,
+            tokens_in: sample.tokens_in,
+            tokens_out: sample.tokens_out,
+            judge_reasoning: Some(judge.reasoning),
+
+            // P1: Efficiency & Provenance
+            generation_time_ms: sample.generation_time_ms,
+            judge_model: judge.judge_model,
+            verdict: judge.verdict,
+
+            // P2: Quality Signals
+            quality_flags,
+
+            // Cost & Metadata
             cost_usd: if include_cost {
                 Some(sample.cost_usd + judge.judge_cost_usd)
             } else {

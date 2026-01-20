@@ -225,7 +225,11 @@ impl RateLimiter {
         };
 
         if wait_time > Duration::ZERO {
-            debug!(model = model, wait_ms = wait_time.as_millis(), "Waiting for rate limit");
+            debug!(
+                model = model,
+                wait_ms = wait_time.as_millis(),
+                "Waiting for rate limit"
+            );
             self.total_wait_ms
                 .fetch_add(wait_time.as_millis() as u64, Ordering::Relaxed);
             tokio::time::sleep(wait_time).await;

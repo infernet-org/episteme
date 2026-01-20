@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand};
 use dpogen::{CheckpointManager, Config, DpoPipeline, OpenRouterClient, SftPipeline};
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{info, Level};
+use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
 #[derive(Parser)]
@@ -115,7 +115,7 @@ path = "output/dataset.jsonl"
 include_rejected = false
 track_costs = true
 "#;
-    println!("{}", example);
+    println!("{example}");
 }
 
 #[tokio::main]
@@ -132,23 +132,40 @@ async fn main() -> Result<()> {
         Commands::Validate => {
             let config = Config::from_file(&cli.config)
                 .with_context(|| format!("Failed to load config from {:?}", cli.config))?;
-            
+
             // Try to resolve API key
-            config.resolve_api_key()
+            config
+                .resolve_api_key()
                 .context("Failed to resolve API key")?;
-            
+
             info!("Configuration is valid");
-            info!("  Workers: {} with {} models", config.workers.size, config.workers.models.len());
-            info!("  Judges: {} with {} models", config.judges.size, config.judges.models.len());
-            info!("  Approval threshold: {:.0}%", config.generation.approval_threshold * 100.0);
+            info!(
+                "  Workers: {} with {} models",
+                config.workers.size,
+                config.workers.models.len()
+            );
+            info!(
+                "  Judges: {} with {} models",
+                config.judges.size,
+                config.judges.models.len()
+            );
+            info!(
+                "  Approval threshold: {:.0}%",
+                config.generation.approval_threshold * 100.0
+            );
             return Ok(());
         }
 
-        Commands::Sft { problems, output, checkpoint } => {
+        Commands::Sft {
+            problems,
+            output,
+            checkpoint,
+        } => {
             let config = Config::from_file(&cli.config)
                 .with_context(|| format!("Failed to load config from {:?}", cli.config))?;
-            
-            let api_key = config.resolve_api_key()
+
+            let api_key = config
+                .resolve_api_key()
                 .context("Failed to resolve API key")?;
 
             let client = Arc::new(OpenRouterClient::new(
@@ -161,7 +178,7 @@ async fn main() -> Result<()> {
 
             let pipeline = SftPipeline::new(config, client)?;
             let problems_data = SftPipeline::load_problems(&problems)?;
-            
+
             // Setup checkpoint manager if requested
             let checkpoint_mgr = if let Some(checkpoint_dir) = checkpoint {
                 let mut mgr = CheckpointManager::new(&checkpoint_dir)
@@ -173,8 +190,10 @@ async fn main() -> Result<()> {
                 None
             };
 
-            let stats = pipeline.run_with_checkpoint(problems_data, &output, checkpoint_mgr).await?;
-            
+            let stats = pipeline
+                .run_with_checkpoint(problems_data, &output, checkpoint_mgr)
+                .await?;
+
             println!("\n=== SFT Generation Complete ===");
             println!("Problems:    {}", stats.total_problems);
             println!("Generated:   {}", stats.total_generated);
@@ -184,19 +203,28 @@ async fn main() -> Result<()> {
             println!("Throughput:  {:.0}/hr", stats.throughput_per_hour);
             println!("Gen cost:    ${:.4}", stats.generation_cost_usd);
             println!("Judge cost:  ${:.4}", stats.judge_cost_usd);
-            println!("Total cost:  ${:.4}", stats.generation_cost_usd + stats.judge_cost_usd);
+            println!(
+                "Total cost:  ${:.4}",
+                stats.generation_cost_usd + stats.judge_cost_usd
+            );
             println!("Runtime:     {:.1}s", stats.runtime_secs);
-            println!("Output:      {:?}", output);
+            println!("Output:      {output:?}");
         }
 
-        Commands::Dpo { problems, output, responses, checkpoint } => {
+        Commands::Dpo {
+            problems,
+            output,
+            responses,
+            checkpoint,
+        } => {
             let mut config = Config::from_file(&cli.config)
                 .with_context(|| format!("Failed to load config from {:?}", cli.config))?;
-            
+
             // Override responses_per_problem from CLI
             config.generation.responses_per_problem = responses;
-            
-            let api_key = config.resolve_api_key()
+
+            let api_key = config
+                .resolve_api_key()
                 .context("Failed to resolve API key")?;
 
             let client = Arc::new(OpenRouterClient::new(
@@ -209,7 +237,7 @@ async fn main() -> Result<()> {
 
             let pipeline = DpoPipeline::new(config, client)?;
             let problems_data = DpoPipeline::load_problems(&problems)?;
-            
+
             // Setup checkpoint manager if requested
             let checkpoint_mgr = if let Some(checkpoint_dir) = checkpoint {
                 let mut mgr = CheckpointManager::new(&checkpoint_dir)
@@ -221,8 +249,10 @@ async fn main() -> Result<()> {
                 None
             };
 
-            let stats = pipeline.run_with_checkpoint(problems_data, &output, checkpoint_mgr).await?;
-            
+            let stats = pipeline
+                .run_with_checkpoint(problems_data, &output, checkpoint_mgr)
+                .await?;
+
             println!("\n=== DPO Generation Complete ===");
             println!("Problems:    {}", stats.total_problems);
             println!("Generated:   {}", stats.total_generated);
@@ -232,9 +262,12 @@ async fn main() -> Result<()> {
             println!("Throughput:  {:.0} pairs/hr", stats.throughput_per_hour);
             println!("Gen cost:    ${:.4}", stats.generation_cost_usd);
             println!("Judge cost:  ${:.4}", stats.judge_cost_usd);
-            println!("Total cost:  ${:.4}", stats.generation_cost_usd + stats.judge_cost_usd);
+            println!(
+                "Total cost:  ${:.4}",
+                stats.generation_cost_usd + stats.judge_cost_usd
+            );
             println!("Runtime:     {:.1}s", stats.runtime_secs);
-            println!("Output:      {:?}", output);
+            println!("Output:      {output:?}");
         }
     }
 

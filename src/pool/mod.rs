@@ -1,7 +1,7 @@
 //! Pool module - Worker and Judge pools.
 
-mod worker;
 mod judge;
+mod worker;
 
-pub use worker::*;
 pub use judge::*;
+pub use worker::*;

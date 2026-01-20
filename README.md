@@ -173,17 +173,65 @@ See `examples/problems.jsonl` for more examples across domains.
 
 ### SFT Output
 
+Each sample includes full metadata for traceability, quality analysis, and debugging:
+
 ```jsonl
 {
-  "id": "sft_001",
+  "id": "ae5f047c-3b8a-4984-8361-4eecd9b3d89d",
   "input": "What is 2 + 2?",
   "output": "The sum of 2 + 2 is 4...",
+  "answer": "4",
   "model": "deepseek/deepseek-r1",
-  "score": 0.92
+  "score": 0.92,
+  "problem_id": "prob_001",
+  "tokens_in": 1265,
+  "tokens_out": 1572,
+  "judge_reasoning": "The reasoning is thorough...",
+  "generation_time_ms": 5336,
+  "judge_model": "openai/gpt-4o",
+  "verdict": "approve",
+  "quality_flags": {
+    "truncated": false,
+    "has_answer_tags": true,
+    "has_reasoning": true,
+    "self_correction": false,
+    "reasoning_length": 1125
+  },
+  "cost_usd": 0.0024
 }
 ```
 
-**Use for**: SFT training, RLHF (score as reward), KTO (threshold score)
+#### Field Reference
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Unique sample identifier |
+| `input` | string | Original problem/prompt |
+| `output` | string | Generated response |
+| `answer` | string? | Extracted final answer (if parseable) |
+| `model` | string | Model used for generation |
+| `score` | float | Quality score from judge (0.0-1.0) |
+| `problem_id` | string | Source problem ID for tracing |
+| `tokens_in` | int | Input tokens consumed |
+| `tokens_out` | int | Output tokens generated |
+| `judge_reasoning` | string? | Judge's explanation for the score |
+| `generation_time_ms` | int | Generation latency in milliseconds |
+| `judge_model` | string | Model used for judging |
+| `verdict` | string | `"approve"` or `"reject"` |
+| `quality_flags` | object | Epistemic quality signals (see below) |
+| `cost_usd` | float? | Total cost (generation + judging) |
+
+#### Quality Flags
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `truncated` | bool | Output appears cut off mid-sentence |
+| `has_answer_tags` | bool | Contains `<answer>`, `\boxed{}`, etc. |
+| `has_reasoning` | bool | Contains reasoning steps (EAE phases, "Step 1", etc.) |
+| `self_correction` | bool | Contains "Wait", "Actually", self-correction patterns |
+| `reasoning_length` | int | Character count of reasoning content |
+
+**Use for**: SFT training, RLHF (score as reward), KTO (threshold score), quality filtering
 
 ### DPO Output
 
@@ -196,7 +244,8 @@ See `examples/problems.jsonl` for more examples across domains.
   "rejected": "2 + 2 = 5...",
   "chosen_score": 0.95,
   "rejected_score": 0.45,
-  "margin": 0.50
+  "chosen_model": "deepseek/deepseek-r1",
+  "rejected_model": "anthropic/claude-sonnet-4"
 }
 ```
 
@@ -232,6 +281,57 @@ datasets:
     field_map:
       prompt: input
       completion: output
+```
+
+### Filtering with Quality Flags
+
+Use the metadata to filter high-quality samples:
+
+```python
+import json
+
+def load_high_quality_samples(path, min_score=0.9):
+    """Load only high-quality, non-truncated samples."""
+    samples = []
+    with open(path) as f:
+        for line in f:
+            sample = json.loads(line)
+            # Filter by score and quality flags
+            if (sample["score"] >= min_score 
+                and not sample["quality_flags"]["truncated"]
+                and sample["quality_flags"]["has_reasoning"]):
+                samples.append(sample)
+    return samples
+
+# Filter for samples with self-correction (shows deeper reasoning)
+def get_self_correcting_samples(path):
+    samples = []
+    with open(path) as f:
+        for line in f:
+            sample = json.loads(line)
+            if sample["quality_flags"]["self_correction"]:
+                samples.append(sample)
+    return samples
+```
+
+### Cost Analysis
+
+```python
+import json
+
+def analyze_costs(path):
+    """Analyze generation costs by model."""
+    costs_by_model = {}
+    with open(path) as f:
+        for line in f:
+            sample = json.loads(line)
+            model = sample["model"]
+            cost = sample.get("cost_usd", 0)
+            if model not in costs_by_model:
+                costs_by_model[model] = {"count": 0, "total_cost": 0}
+            costs_by_model[model]["count"] += 1
+            costs_by_model[model]["total_cost"] += cost
+    return costs_by_model
 ```
 
 ## Environment Variables

@@ -9,7 +9,7 @@
 use crate::checkpoint::CheckpointManager;
 use crate::client::OpenRouterClient;
 use crate::models::{
-    Config, DpogenError, DpoPair, JudgeResult, Problem, Result, RunStats, Sample, Verdict,
+    Config, DpoPair, DpogenError, JudgeResult, Problem, Result, RunStats, Sample, Verdict,
 };
 use crate::pool::{JudgePool, WorkerPool};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -77,9 +77,8 @@ impl DpoPipeline {
             if line.trim().is_empty() {
                 continue;
             }
-            let problem: Problem = serde_json::from_str(&line).map_err(|e| {
-                DpogenError::ParseError(format!("Line {}: {}", line_num + 1, e))
-            })?;
+            let problem: Problem = serde_json::from_str(&line)
+                .map_err(|e| DpogenError::ParseError(format!("Line {}: {}", line_num + 1, e)))?;
             problems.push(problem);
         }
 
@@ -90,10 +89,7 @@ impl DpoPipeline {
     /// Create a DPO pair from judged samples.
     ///
     /// K_i: Chosen has higher score than rejected.
-    fn create_pair(
-        problem: &Problem,
-        judged_samples: &[(Sample, JudgeResult)],
-    ) -> Option<DpoPair> {
+    fn create_pair(problem: &Problem, judged_samples: &[(Sample, JudgeResult)]) -> Option<DpoPair> {
         if judged_samples.len() < 2 {
             return None;
         }
@@ -156,8 +152,10 @@ impl DpoPipeline {
             File::create(output_path).map_err(|e| DpogenError::io("creating output file", e))?;
         let mut writer = BufWriter::new(output_file);
 
-        let mut stats = RunStats::default();
-        stats.total_problems = total;
+        let mut stats = RunStats {
+            total_problems: total,
+            ..Default::default()
+        };
 
         let mut pairs_created = 0;
         let mut pairs_skipped = 0;
@@ -202,11 +200,10 @@ impl DpoPipeline {
                 pairs_created += 1;
                 stats.total_approved += 1;
 
-                let json = serde_json::to_string(&pair).map_err(|e| {
-                    DpogenError::Internal(format!("Failed to serialize pair: {}", e))
-                })?;
+                let json = serde_json::to_string(&pair)
+                    .map_err(|e| DpogenError::Internal(format!("Failed to serialize pair: {e}")))?;
 
-                writeln!(writer, "{}", json).map_err(|e| DpogenError::io("writing output", e))?;
+                writeln!(writer, "{json}").map_err(|e| DpogenError::io("writing output", e))?;
             } else {
                 pairs_skipped += 1;
                 stats.total_rejected += 1;
@@ -221,7 +218,7 @@ impl DpoPipeline {
 
             // Update progress
             pb.set_position((idx + 1) as u64);
-            pb.set_message(format!("pairs: {}, skipped: {}", pairs_created, pairs_skipped));
+            pb.set_message(format!("pairs: {pairs_created}, skipped: {pairs_skipped}"));
         }
 
         // Finalize
@@ -229,8 +226,7 @@ impl DpoPipeline {
             .flush()
             .map_err(|e| DpogenError::io("flushing output", e))?;
         pb.finish_with_message(format!(
-            "Done! {} pairs created, {} skipped",
-            pairs_created, pairs_skipped
+            "Done! {pairs_created} pairs created, {pairs_skipped} skipped"
         ));
 
         stats.runtime_secs = start.elapsed().as_secs_f64();
@@ -341,7 +337,10 @@ impl DpoPipeline {
             let gen_cost: f64 = samples.iter().map(|s| s.cost_usd).sum();
 
             // Mark as generated (use first model for tracking)
-            let model = samples.first().map(|s| s.model.as_str()).unwrap_or("unknown");
+            let model = samples
+                .first()
+                .map(|s| s.model.as_str())
+                .unwrap_or("unknown");
             checkpoint.mark_generated(&problem.id, model, gen_cost)?;
 
             // Judge all samples
@@ -354,14 +353,14 @@ impl DpoPipeline {
             if let Some(pair) = Self::create_pair(&problem, &judged) {
                 pairs_created += 1;
 
-                let json = serde_json::to_string(&pair).map_err(|e| {
-                    DpogenError::Internal(format!("Failed to serialize pair: {}", e))
-                })?;
+                let json = serde_json::to_string(&pair)
+                    .map_err(|e| DpogenError::Internal(format!("Failed to serialize pair: {e}")))?;
 
-                writeln!(writer, "{}", json).map_err(|e| DpogenError::io("writing output", e))?;
+                writeln!(writer, "{json}").map_err(|e| DpogenError::io("writing output", e))?;
 
                 // Get the score from the chosen response
-                let chosen_score = judged.iter()
+                let chosen_score = judged
+                    .iter()
                     .max_by(|a, b| a.1.score.partial_cmp(&b.1.score).unwrap())
                     .map(|(_, jr)| jr.score)
                     .unwrap_or(0.0);
@@ -381,7 +380,7 @@ impl DpoPipeline {
 
             // Update progress
             pb.set_position((already_done + idx + 1) as u64);
-            pb.set_message(format!("pairs: {}, skipped: {}", pairs_created, pairs_skipped));
+            pb.set_message(format!("pairs: {pairs_created}, skipped: {pairs_skipped}"));
         }
 
         // Finalize
@@ -389,8 +388,7 @@ impl DpoPipeline {
             .flush()
             .map_err(|e| DpogenError::io("flushing output", e))?;
         pb.finish_with_message(format!(
-            "Done! {} pairs created, {} skipped",
-            pairs_created, pairs_skipped
+            "Done! {pairs_created} pairs created, {pairs_skipped} skipped"
         ));
 
         let runtime = start.elapsed().as_secs_f64();

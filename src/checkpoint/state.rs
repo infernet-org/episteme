@@ -244,7 +244,11 @@ impl CheckpointManager {
     }
 
     /// Initialize a new checkpoint or load existing one.
-    pub fn init_or_load(&mut self, pipeline: &str, problems: &[Problem]) -> Result<&CheckpointState> {
+    pub fn init_or_load(
+        &mut self,
+        pipeline: &str,
+        problems: &[Problem],
+    ) -> Result<&CheckpointState> {
         if self.exists() {
             self.load()?;
             info!(
@@ -266,17 +270,18 @@ impl CheckpointManager {
             .map_err(|e| DpogenError::io("opening checkpoint", e))?;
         let reader = BufReader::new(file);
         let state: CheckpointState = serde_json::from_reader(reader)
-            .map_err(|e| DpogenError::ParseError(format!("Invalid checkpoint: {}", e)))?;
-        
+            .map_err(|e| DpogenError::ParseError(format!("Invalid checkpoint: {e}")))?;
+
         self.state = Some(state);
         Ok(self.state.as_ref().unwrap())
     }
 
     /// Save checkpoint to disk (atomic write).
     pub fn save(&self) -> Result<()> {
-        let state = self.state.as_ref().ok_or_else(|| {
-            DpogenError::Internal("No checkpoint state to save".to_string())
-        })?;
+        let state = self
+            .state
+            .as_ref()
+            .ok_or_else(|| DpogenError::Internal("No checkpoint state to save".to_string()))?;
 
         // Backup existing checkpoint
         if self.checkpoint_path.exists() {
@@ -286,11 +291,11 @@ impl CheckpointManager {
 
         // Write to temp file
         let temp_path = self.dir.join("checkpoint.tmp.json");
-        let file = File::create(&temp_path)
-            .map_err(|e| DpogenError::io("creating temp checkpoint", e))?;
+        let file =
+            File::create(&temp_path).map_err(|e| DpogenError::io("creating temp checkpoint", e))?;
         let writer = BufWriter::new(file);
         serde_json::to_writer_pretty(writer, state)
-            .map_err(|e| DpogenError::Internal(format!("Serializing checkpoint: {}", e)))?;
+            .map_err(|e| DpogenError::Internal(format!("Serializing checkpoint: {e}")))?;
 
         // Atomic rename
         fs::rename(&temp_path, &self.checkpoint_path)
@@ -319,7 +324,13 @@ impl CheckpointManager {
     }
 
     /// Mark judged and save.
-    pub fn mark_judged(&mut self, problem_id: &str, score: f64, verdict: Verdict, judge_cost: f64) -> Result<()> {
+    pub fn mark_judged(
+        &mut self,
+        problem_id: &str,
+        score: f64,
+        verdict: Verdict,
+        judge_cost: f64,
+    ) -> Result<()> {
         if let Some(state) = &mut self.state {
             state.mark_judged(problem_id, score, verdict, judge_cost);
         }

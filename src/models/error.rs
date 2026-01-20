@@ -13,7 +13,6 @@ pub enum DpogenError {
     // ═══════════════════════════════════════════════════════════════════
     // B_i FALSIFIED — Belief proven wrong (expected failures)
     // ═══════════════════════════════════════════════════════════════════
-
     #[error("Configuration error: {0}")]
     Config(#[from] super::ConfigError),
 
@@ -32,7 +31,6 @@ pub enum DpogenError {
     // ═══════════════════════════════════════════════════════════════════
     // I^B MATERIALIZED — Bounded ignorance became known-bad
     // ═══════════════════════════════════════════════════════════════════
-
     #[error("OpenRouter API error: {0}")]
     OpenRouterApi(#[from] OpenRouterError),
 
@@ -55,7 +53,6 @@ pub enum DpogenError {
     // ═══════════════════════════════════════════════════════════════════
     // K_i VIOLATED — Invariant broken (bug, should not happen)
     // ═══════════════════════════════════════════════════════════════════
-
     #[error("Internal error: {0}")]
     Internal(String),
 
@@ -65,7 +62,6 @@ pub enum DpogenError {
     // ═══════════════════════════════════════════════════════════════════
     // I^B UNRESOLVABLE — Truly unknown failure
     // ═══════════════════════════════════════════════════════════════════
-
     #[error("Unknown error: {0}")]
     Unknown(String),
 }
@@ -86,19 +82,13 @@ pub enum OpenRouterError {
     },
 
     #[error("API error (status {status}): {message}")]
-    ApiError {
-        status: u16,
-        message: String,
-    },
+    ApiError { status: u16, message: String },
 
     #[error("Invalid response: {0}")]
     InvalidResponse(String),
 
     #[error("Request failed after {attempts} attempts: {last_error}")]
-    MaxRetriesExceeded {
-        attempts: u32,
-        last_error: String,
-    },
+    MaxRetriesExceeded { attempts: u32, last_error: String },
 }
 
 impl DpogenError {
@@ -115,9 +105,9 @@ impl DpogenError {
         matches!(
             self,
             Self::Timeout(_)
-            | Self::RateLimited { .. }
-            | Self::Network(_)
-            | Self::OpenRouterApi(OpenRouterError::RateLimited { .. })
+                | Self::RateLimited { .. }
+                | Self::Network(_)
+                | Self::OpenRouterApi(OpenRouterError::RateLimited { .. })
         )
     }
 
@@ -125,9 +115,9 @@ impl DpogenError {
     pub fn retry_after(&self) -> Option<f64> {
         match self {
             Self::RateLimited { retry_after_secs } => Some(*retry_after_secs),
-            Self::OpenRouterApi(OpenRouterError::RateLimited { retry_after_secs, .. }) => {
-                *retry_after_secs
-            }
+            Self::OpenRouterApi(OpenRouterError::RateLimited {
+                retry_after_secs, ..
+            }) => *retry_after_secs,
             _ => None,
         }
     }

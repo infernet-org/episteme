@@ -7,9 +7,9 @@
 //! - I^B (Bounded): Error variants with fallback strategies
 
 mod config;
-mod sample;
 mod error;
+mod sample;
 
 pub use config::*;
-pub use sample::*;
 pub use error::*;
+pub use sample::*;

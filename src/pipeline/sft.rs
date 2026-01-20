@@ -68,9 +68,8 @@ impl SftPipeline {
             if line.trim().is_empty() {
                 continue;
             }
-            let problem: Problem = serde_json::from_str(&line).map_err(|e| {
-                DpogenError::ParseError(format!("Line {}: {}", line_num + 1, e))
-            })?;
+            let problem: Problem = serde_json::from_str(&line)
+                .map_err(|e| DpogenError::ParseError(format!("Line {}: {}", line_num + 1, e)))?;
             problems.push(problem);
         }
 
@@ -104,8 +103,10 @@ impl SftPipeline {
             File::create(output_path).map_err(|e| DpogenError::io("creating output file", e))?;
         let mut writer = BufWriter::new(output_file);
 
-        let mut stats = RunStats::default();
-        stats.total_problems = total;
+        let mut stats = RunStats {
+            total_problems: total,
+            ..Default::default()
+        };
 
         // Process in batches for better resource utilization
         let batch_size = (self.config.workers.size * 2).max(10);
@@ -149,10 +150,10 @@ impl SftPipeline {
                         );
 
                         let json = serde_json::to_string(&sft_sample).map_err(|e| {
-                            DpogenError::Internal(format!("Failed to serialize sample: {}", e))
+                            DpogenError::Internal(format!("Failed to serialize sample: {e}"))
                         })?;
 
-                        writeln!(writer, "{}", json)
+                        writeln!(writer, "{json}")
                             .map_err(|e| DpogenError::io("writing output", e))?;
                     }
                     Verdict::Reject => {
@@ -168,10 +169,10 @@ impl SftPipeline {
                             );
 
                             let json = serde_json::to_string(&sft_sample).map_err(|e| {
-                                DpogenError::Internal(format!("Failed to serialize sample: {}", e))
+                                DpogenError::Internal(format!("Failed to serialize sample: {e}"))
                             })?;
 
-                            writeln!(writer, "{}", json)
+                            writeln!(writer, "{json}")
                                 .map_err(|e| DpogenError::io("writing output", e))?;
                         }
                     }
@@ -186,8 +187,7 @@ impl SftPipeline {
             // Update progress
             pb.set_position(batch_end as u64);
             pb.set_message(format!(
-                "approved: {}, rejected: {}",
-                approved_count, rejected_count
+                "approved: {approved_count}, rejected: {rejected_count}"
             ));
         }
 
@@ -196,8 +196,7 @@ impl SftPipeline {
             .flush()
             .map_err(|e| DpogenError::io("flushing output", e))?;
         pb.finish_with_message(format!(
-            "Done! {} approved, {} rejected",
-            approved_count, rejected_count
+            "Done! {approved_count} approved, {rejected_count} rejected"
         ));
 
         stats.runtime_secs = start.elapsed().as_secs_f64();
@@ -302,7 +301,12 @@ impl SftPipeline {
             // Write approved samples and update checkpoint
             for (sample, judge_result) in judged {
                 // Extract original problem ID (remove any suffix)
-                let problem_id = sample.problem_id.split('_').next().unwrap_or(&sample.problem_id).to_string();
+                let problem_id = sample
+                    .problem_id
+                    .split('_')
+                    .next()
+                    .unwrap_or(&sample.problem_id)
+                    .to_string();
 
                 match judge_result.verdict {
                     Verdict::Approve => {
@@ -315,10 +319,10 @@ impl SftPipeline {
                         );
 
                         let json = serde_json::to_string(&sft_sample).map_err(|e| {
-                            DpogenError::Internal(format!("Failed to serialize sample: {}", e))
+                            DpogenError::Internal(format!("Failed to serialize sample: {e}"))
                         })?;
 
-                        writeln!(writer, "{}", json)
+                        writeln!(writer, "{json}")
                             .map_err(|e| DpogenError::io("writing output", e))?;
 
                         checkpoint.mark_judged(
@@ -340,10 +344,10 @@ impl SftPipeline {
                             );
 
                             let json = serde_json::to_string(&sft_sample).map_err(|e| {
-                                DpogenError::Internal(format!("Failed to serialize sample: {}", e))
+                                DpogenError::Internal(format!("Failed to serialize sample: {e}"))
                             })?;
 
-                            writeln!(writer, "{}", json)
+                            writeln!(writer, "{json}")
                                 .map_err(|e| DpogenError::io("writing output", e))?;
                         }
 
@@ -365,8 +369,7 @@ impl SftPipeline {
             // Update progress
             pb.set_position((already_done + batch_end) as u64);
             pb.set_message(format!(
-                "approved: {}, rejected: {}",
-                approved_count, rejected_count
+                "approved: {approved_count}, rejected: {rejected_count}"
             ));
         }
 
@@ -375,8 +378,7 @@ impl SftPipeline {
             .flush()
             .map_err(|e| DpogenError::io("flushing output", e))?;
         pb.finish_with_message(format!(
-            "Done! {} approved, {} rejected",
-            approved_count, rejected_count
+            "Done! {approved_count} approved, {rejected_count} rejected"
         ));
 
         let runtime = start.elapsed().as_secs_f64();

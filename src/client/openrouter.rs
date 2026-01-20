@@ -8,10 +8,10 @@
 
 use crate::client::RateLimiter;
 use crate::models::{DpogenError, ModelSpec, OpenRouterError, Result};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tracing::debug;
 
@@ -149,7 +149,7 @@ impl OpenRouterClient {
         let client = reqwest::Client::builder()
             .timeout(timeout)
             .build()
-            .map_err(|e| DpogenError::Network(e))?;
+            .map_err(DpogenError::Network)?;
 
         Ok(Self {
             client,
@@ -186,12 +186,7 @@ impl OpenRouterClient {
     }
 
     /// Calculate cost for a request.
-    fn calculate_cost(
-        &self,
-        model_spec: &ModelSpec,
-        input_tokens: u32,
-        output_tokens: u32,
-    ) -> f64 {
+    fn calculate_cost(&self, model_spec: &ModelSpec, input_tokens: u32, output_tokens: u32) -> f64 {
         let input_cost = (input_tokens as f64 / 1_000_000.0) * model_spec.input_price_per_1m;
         let output_cost = (output_tokens as f64 / 1_000_000.0) * model_spec.output_price_per_1m;
         input_cost + output_cost
@@ -246,7 +241,11 @@ impl OpenRouterClient {
                     }
                     if attempt < self.max_retries - 1 {
                         let backoff = Duration::from_secs(2u64.pow(attempt));
-                        debug!(attempt = attempt, backoff_secs = backoff.as_secs(), "Retrying after network error");
+                        debug!(
+                            attempt = attempt,
+                            backoff_secs = backoff.as_secs(),
+                            "Retrying after network error"
+                        );
                         tokio::time::sleep(backoff).await;
                     }
                     continue;
@@ -257,7 +256,8 @@ impl OpenRouterClient {
             let headers = response.headers().clone();
 
             // Update rate limiter from headers
-            self.rate_limiter.record_request(&model.id, status, &headers);
+            self.rate_limiter
+                .record_request(&model.id, status, &headers);
 
             // Handle rate limiting
             if status == 429 {
@@ -285,23 +285,24 @@ impl OpenRouterClient {
             // Handle other errors
             if !response.status().is_success() {
                 let error_body = response.text().await.unwrap_or_default();
-                let error = if let Ok(api_error) = serde_json::from_str::<ApiErrorResponse>(&error_body) {
-                    if status == 401 {
-                        OpenRouterError::AuthenticationFailed
-                    } else if status == 404 {
-                        OpenRouterError::ModelNotFound(model.id.clone())
+                let error =
+                    if let Ok(api_error) = serde_json::from_str::<ApiErrorResponse>(&error_body) {
+                        if status == 401 {
+                            OpenRouterError::AuthenticationFailed
+                        } else if status == 404 {
+                            OpenRouterError::ModelNotFound(model.id.clone())
+                        } else {
+                            OpenRouterError::ApiError {
+                                status,
+                                message: api_error.error.message,
+                            }
+                        }
                     } else {
                         OpenRouterError::ApiError {
                             status,
-                            message: api_error.error.message,
+                            message: error_body,
                         }
-                    }
-                } else {
-                    OpenRouterError::ApiError {
-                        status,
-                        message: error_body,
-                    }
-                };
+                    };
 
                 last_error = Some(DpogenError::OpenRouterApi(error));
 
@@ -321,7 +322,7 @@ impl OpenRouterClient {
             let body: ChatCompletionResponse = response
                 .json()
                 .await
-                .map_err(|e| DpogenError::ParseError(format!("Failed to parse response: {}", e)))?;
+                .map_err(|e| DpogenError::ParseError(format!("Failed to parse response: {e}")))?;
 
             let content = body
                 .choices
@@ -375,7 +376,8 @@ impl OpenRouterClient {
         temperature: Option<f64>,
     ) -> Result<CompletionResponse> {
         let messages = vec![Message::system(system_prompt), Message::user(user_prompt)];
-        self.complete(model, messages, max_tokens, temperature).await
+        self.complete(model, messages, max_tokens, temperature)
+            .await
     }
 
     /// Get total cost tracked.
