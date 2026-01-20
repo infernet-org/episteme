@@ -56,32 +56,18 @@ impl ModelRateLimitState {
         let now = Instant::now();
 
         // Check backoff
-        if let Some(backoff_until) = self.backoff_until {
-            if now < backoff_until {
-                return false;
-            }
+        if self.backoff_until.is_some_and(|t| now < t) {
+            return false;
         }
 
-        // Check request limit
-        if let Some(remaining) = self.remaining_requests {
-            if remaining == 0 {
-                if let Some(reset_at) = self.reset_requests_at {
-                    if now < reset_at {
-                        return false;
-                    }
-                }
-            }
+        // Check request limit: blocked if remaining is 0 and reset time hasn't passed
+        if self.remaining_requests == Some(0) && self.reset_requests_at.is_some_and(|t| now < t) {
+            return false;
         }
 
-        // Check token limit
-        if let Some(remaining) = self.remaining_tokens {
-            if remaining == 0 {
-                if let Some(reset_at) = self.reset_tokens_at {
-                    if now < reset_at {
-                        return false;
-                    }
-                }
-            }
+        // Check token limit: blocked if remaining is 0 and reset time hasn't passed
+        if self.remaining_tokens == Some(0) && self.reset_tokens_at.is_some_and(|t| now < t) {
+            return false;
         }
 
         true
@@ -97,18 +83,16 @@ impl ModelRateLimitState {
             max_wait = max_wait.max(backoff_until - now);
         }
 
-        // Check request reset
-        if self.remaining_requests == Some(0) {
-            if let Some(reset_at) = self.reset_requests_at.filter(|&t| t > now) {
-                max_wait = max_wait.max(reset_at - now);
-            }
+        // Check request reset: wait if remaining is 0 and reset is in the future
+        if self.remaining_requests == Some(0) && self.reset_requests_at.is_some_and(|t| t > now) {
+            let reset_at = self.reset_requests_at.unwrap(); // safe: is_some_and passed
+            max_wait = max_wait.max(reset_at - now);
         }
 
-        // Check token reset
-        if self.remaining_tokens == Some(0) {
-            if let Some(reset_at) = self.reset_tokens_at.filter(|&t| t > now) {
-                max_wait = max_wait.max(reset_at - now);
-            }
+        // Check token reset: wait if remaining is 0 and reset is in the future
+        if self.remaining_tokens == Some(0) && self.reset_tokens_at.is_some_and(|t| t > now) {
+            let reset_at = self.reset_tokens_at.unwrap(); // safe: is_some_and passed
+            max_wait = max_wait.max(reset_at - now);
         }
 
         max_wait
