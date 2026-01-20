@@ -110,42 +110,36 @@ Please evaluate this sample according to the criteria and provide:
         // Pattern: "Score: 0.85" or "score: 0.85"
         let re = Regex::new(r"[Ss]core[:\s]+(\d+\.?\d*)").ok()?;
         if let Some(captures) = re.captures(content) {
-            if let Some(score_str) = captures.get(1) {
-                if let Ok(score) = score_str.as_str().parse::<f64>() {
-                    return Some(score.clamp(0.0, 1.0));
-                }
+            if let Some(score) = captures.get(1).and_then(|s| s.as_str().parse::<f64>().ok()) {
+                return Some(score.clamp(0.0, 1.0));
             }
         }
 
         // Pattern: "**Score:** 0.85"
         let re = Regex::new(r"\*\*[Ss]core\*\*[:\s]+(\d+\.?\d*)").ok()?;
         if let Some(captures) = re.captures(content) {
-            if let Some(score_str) = captures.get(1) {
-                if let Ok(score) = score_str.as_str().parse::<f64>() {
-                    return Some(score.clamp(0.0, 1.0));
-                }
+            if let Some(score) = captures.get(1).and_then(|s| s.as_str().parse::<f64>().ok()) {
+                return Some(score.clamp(0.0, 1.0));
             }
         }
 
         // Pattern: "Overall score: 0.85"
         let re = Regex::new(r"[Oo]verall\s+[Ss]core[:\s]+(\d+\.?\d*)").ok()?;
         if let Some(captures) = re.captures(content) {
-            if let Some(score_str) = captures.get(1) {
-                if let Ok(score) = score_str.as_str().parse::<f64>() {
-                    return Some(score.clamp(0.0, 1.0));
-                }
+            if let Some(score) = captures.get(1).and_then(|s| s.as_str().parse::<f64>().ok()) {
+                return Some(score.clamp(0.0, 1.0));
             }
         }
 
         // Fallback: look for any decimal between 0 and 1
         let re = Regex::new(r"(0\.\d+|1\.0)").ok()?;
         for captures in re.captures_iter(content) {
-            if let Some(score_str) = captures.get(1) {
-                if let Ok(score) = score_str.as_str().parse::<f64>() {
-                    if (0.0..=1.0).contains(&score) {
-                        return Some(score);
-                    }
-                }
+            if let Some(score) = captures
+                .get(1)
+                .and_then(|s| s.as_str().parse::<f64>().ok())
+                .filter(|&s| (0.0..=1.0).contains(&s))
+            {
+                return Some(score);
             }
         }
 
