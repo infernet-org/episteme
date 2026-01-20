@@ -93,27 +93,21 @@ impl ModelRateLimitState {
         let mut max_wait = Duration::ZERO;
 
         // Check backoff
-        if let Some(backoff_until) = self.backoff_until {
-            if backoff_until > now {
-                max_wait = max_wait.max(backoff_until - now);
-            }
+        if let Some(backoff_until) = self.backoff_until.filter(|&t| t > now) {
+            max_wait = max_wait.max(backoff_until - now);
         }
 
         // Check request reset
         if self.remaining_requests == Some(0) {
-            if let Some(reset_at) = self.reset_requests_at {
-                if reset_at > now {
-                    max_wait = max_wait.max(reset_at - now);
-                }
+            if let Some(reset_at) = self.reset_requests_at.filter(|&t| t > now) {
+                max_wait = max_wait.max(reset_at - now);
             }
         }
 
         // Check token reset
         if self.remaining_tokens == Some(0) {
-            if let Some(reset_at) = self.reset_tokens_at {
-                if reset_at > now {
-                    max_wait = max_wait.max(reset_at - now);
-                }
+            if let Some(reset_at) = self.reset_tokens_at.filter(|&t| t > now) {
+                max_wait = max_wait.max(reset_at - now);
             }
         }
 
