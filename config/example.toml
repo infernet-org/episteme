@@ -1,0 +1,33 @@
+# dpogen configuration file
+
+[openrouter]
+# API key (can also use OPENROUTER_API_KEY env var)
+# api_key = "sk-..."
+base_url = "https://openrouter.ai/api/v1"
+timeout_secs = 180
+max_retries = 3
+
+[workers]
+size = 10
+models = [
+    { id = "deepseek/deepseek-r1", label = "DS-R1", weight = 2, input_price_per_1m = 0.70, output_price_per_1m = 2.50, max_tokens = 4096, temperature = 0.7 },
+    { id = "anthropic/claude-sonnet-4", label = "Sonnet", weight = 1, input_price_per_1m = 3.0, output_price_per_1m = 15.0, max_tokens = 4096, temperature = 0.7 },
+]
+
+[judges]
+size = 5
+models = [
+    { id = "openai/gpt-4o", label = "GPT-4o", weight = 1, input_price_per_1m = 2.5, output_price_per_1m = 10.0, max_tokens = 2048, temperature = 0.3 },
+]
+
+[generation]
+system_prompt = "prompts/system.md"
+judge_prompt = "prompts/judge.md"
+approval_threshold = 0.85
+responses_per_problem = 3  # For DPO: generate N responses per problem
+
+[output]
+path = "output/dataset.jsonl"
+# checkpoint_dir = "checkpoints/"
+include_rejected = false
+track_costs = true

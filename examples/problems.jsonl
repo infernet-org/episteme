@@ -1,0 +1,20 @@
+{"id": "math_001", "input": "Prove that the sum of the first n natural numbers is n(n+1)/2."}
+{"id": "math_002", "input": "Find all integer solutions to x^2 + y^2 = z^2 where x, y, z are positive."}
+{"id": "math_003", "input": "Prove that sqrt(2) is irrational."}
+{"id": "logic_001", "input": "Given: All mammals are warm-blooded. All whales are mammals. Conclude whether whales are warm-blooded."}
+{"id": "logic_002", "input": "If it rains, the ground is wet. The ground is wet. Can we conclude it rained? Explain."}
+{"id": "logic_003", "input": "Prove or disprove: If A implies B, and B implies C, then A implies C."}
+{"id": "code_001", "input": "Write a function to check if a string is a palindrome. Explain your approach."}
+{"id": "code_002", "input": "Implement binary search on a sorted array. What is its time complexity?"}
+{"id": "code_003", "input": "Design an algorithm to find the longest common subsequence of two strings."}
+{"id": "crypto_001", "input": "Explain how RSA encryption works and why it is secure."}
+{"id": "crypto_002", "input": "What is a hash collision and why does it matter for cryptographic hash functions?"}
+{"id": "crypto_003", "input": "Describe the Diffie-Hellman key exchange protocol and its security assumptions."}
+{"id": "reasoning_001", "input": "A bat and ball cost $1.10 together. The bat costs $1.00 more than the ball. How much does the ball cost?"}
+{"id": "reasoning_002", "input": "If you have a 3-gallon jug and a 5-gallon jug, how can you measure exactly 4 gallons of water?"}
+{"id": "reasoning_003", "input": "Three people check into a hotel room that costs $30. They each pay $10. Later, the clerk realizes the room was only $25. He gives $5 to the bellhop to return. The bellhop keeps $2 and gives $1 back to each person. Now each person paid $9 (total $27), plus the bellhop's $2 = $29. Where is the missing dollar?"}
+{"id": "science_001", "input": "Explain why the sky is blue using physics principles."}
+{"id": "science_002", "input": "What causes the seasons on Earth? Is it the distance from the Sun?"}
+{"id": "science_003", "input": "Explain the concept of entropy and the second law of thermodynamics."}
+{"id": "game_theory_001", "input": "Explain the Prisoner's Dilemma and why rational players might not cooperate."}
+{"id": "game_theory_002", "input": "What is a Nash equilibrium? Give an example."}
