@@ -1,4 +1,4 @@
-//! Core data models for dpogen.
+//! Core data models for episteme.
 //!
 //! Epistemic mapping:
 //! - K_i (Knowledge): Concrete types with compile-time guarantees

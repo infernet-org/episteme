@@ -7,7 +7,7 @@
 //! - I^R: Judge prompt and threshold are configurable
 
 use crate::client::OpenRouterClient;
-use crate::models::{DpogenError, JudgeResult, ModelSpec, Result, Sample, Verdict};
+use crate::models::{EpistemeError, JudgeResult, ModelSpec, Result, Sample, Verdict};
 use chrono::Utc;
 use regex::Regex;
 use std::sync::Arc;
@@ -180,7 +180,7 @@ Please evaluate this sample according to the criteria and provide:
             .semaphore
             .acquire()
             .await
-            .map_err(|_| DpogenError::Internal("Semaphore closed".to_string()))?;
+            .map_err(|_| EpistemeError::Internal("Semaphore closed".to_string()))?;
 
         let model = self.select_model();
         let start = Instant::now();
@@ -306,7 +306,7 @@ impl JudgePoolHandle {
             .semaphore
             .acquire()
             .await
-            .map_err(|_| DpogenError::Internal("Semaphore closed".to_string()))?;
+            .map_err(|_| EpistemeError::Internal("Semaphore closed".to_string()))?;
 
         let model = self.select_model();
         let start = Instant::now();

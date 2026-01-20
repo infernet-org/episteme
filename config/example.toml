@@ -1,4 +1,4 @@
-# dpogen configuration file
+# episteme configuration file
 
 [openrouter]
 # API key (can also use OPENROUTER_API_KEY env var)

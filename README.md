@@ -1,15 +1,15 @@
-# dpogen
+# episteme
 
-High-performance synthetic dataset generation for RL training via OpenRouter.
+Epistemic dataset generation for RL training via OpenRouter.
 
 ## Overview
 
-`dpogen` is a Rust CLI tool for generating training datasets using frontier LLMs. It's **RL-agnostic** — the generated data can be used for:
+`episteme` is a Rust CLI tool for generating training datasets using frontier LLMs. It's **RL-agnostic** — the generated data can be used for:
 
-| Method | Data Format | dpogen Support |
+| Method | Data Format | episteme Support |
 |--------|-------------|----------------|
-| **SFT** | `(prompt, completion)` | ✅ `dpogen sft` |
-| **DPO/IPO** | `(prompt, chosen, rejected)` | ✅ `dpogen dpo` |
+| **SFT** | `(prompt, completion)` | ✅ `episteme sft` |
+| **DPO/IPO** | `(prompt, chosen, rejected)` | ✅ `episteme dpo` |
 | **RLHF/PPO** | `(prompt, completion, reward)` | ✅ Use SFT output (score = reward) |
 | **GRPO** | `(prompt, completions[], scores[])` | ✅ Use DPO with N responses |
 | **KTO** | `(prompt, completion, label)` | ✅ Threshold SFT scores |
@@ -18,7 +18,7 @@ High-performance synthetic dataset generation for RL training via OpenRouter.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│                         dpogen                                      │
+│                        episteme                                     │
 │                                                                     │
 │  ┌─────────────┐      problems       ┌─────────────┐                │
 │  │   Input     │────────────────────►│   Worker    │                │
@@ -48,6 +48,7 @@ High-performance synthetic dataset generation for RL training via OpenRouter.
 - **Checkpointing**: Resume interrupted runs
 - **Rate limiting**: Per-model rate limiting with backoff
 - **Cost tracking**: Monitor API costs in real-time
+- **Epistemic metadata**: Quality flags for truncation, reasoning, self-correction
 
 ## Installation
 
@@ -57,7 +58,7 @@ cargo install --path .
 
 # Or build directly
 cargo build --release
-./target/release/dpogen --help
+./target/release/episteme --help
 ```
 
 ## Quick Start
@@ -67,13 +68,13 @@ cargo build --release
 export OPENROUTER_API_KEY="sk-or-..."
 
 # Generate SFT data
-dpogen sft \
+episteme sft \
   --config config/example.toml \
   --problems examples/problems.jsonl \
   --output sft_dataset.jsonl
 
 # Generate DPO preference pairs
-dpogen dpo \
+episteme dpo \
   --config config/example.toml \
   --problems examples/problems.jsonl \
   --output dpo_dataset.jsonl \
@@ -87,7 +88,7 @@ dpogen dpo \
 Generate high-quality completions with judge filtering:
 
 ```bash
-dpogen sft \
+episteme sft \
   --config config.toml \
   --problems problems.jsonl \
   --output sft_dataset.jsonl
@@ -98,7 +99,7 @@ dpogen sft \
 Generate preference pairs (chosen vs rejected):
 
 ```bash
-dpogen dpo \
+episteme dpo \
   --config config.toml \
   --problems problems.jsonl \
   --output dpo_dataset.jsonl \
@@ -109,10 +110,10 @@ dpogen dpo \
 
 ```bash
 # Validate configuration
-dpogen --config config.toml validate
+episteme --config config.toml validate
 
 # Show example configuration
-dpogen example
+episteme example
 ```
 
 ## Configuration
@@ -151,7 +152,7 @@ track_costs = true
 
 ### Prompts
 
-You provide your own prompts — dpogen doesn't assume any specific format. Example prompts are included in `prompts/examples/`:
+You provide your own prompts — episteme doesn't assume any specific format. Example prompts are included in `prompts/examples/`:
 
 - `system-reasoning.md` - Chain-of-thought reasoning prompt
 - `judge-correctness.md` - Quality scoring prompt
@@ -259,7 +260,7 @@ Each sample includes full metadata for traceability, quality analysis, and debug
 from datasets import load_dataset
 from trl import DPOTrainer
 
-# Load dpogen output
+# Load episteme output
 dataset = load_dataset("json", data_files="dpo_dataset.jsonl")
 
 # Train with TRL
@@ -267,7 +268,7 @@ trainer = DPOTrainer(
     model=model,
     ref_model=ref_model,
     train_dataset=dataset["train"],
-    # dpogen format matches TRL expectations
+    # episteme format matches TRL expectations
 )
 ```
 
@@ -342,7 +343,7 @@ def analyze_costs(path):
 ## Project Structure
 
 ```
-dpogen/
+episteme/
 ├── src/
 │   ├── main.rs           # CLI entry point
 │   ├── lib.rs            # Library exports

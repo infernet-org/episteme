@@ -5,7 +5,7 @@
 
 use crate::checkpoint::CheckpointManager;
 use crate::client::OpenRouterClient;
-use crate::models::{Config, DpogenError, Problem, Result, RunStats, SftSample, Verdict};
+use crate::models::{Config, EpistemeError, Problem, Result, RunStats, SftSample, Verdict};
 use crate::pool::{JudgePool, WorkerPool};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs::{File, OpenOptions};
@@ -29,10 +29,10 @@ impl SftPipeline {
     pub fn new(config: Config, client: Arc<OpenRouterClient>) -> Result<Self> {
         // Load prompts
         let system_prompt = std::fs::read_to_string(&config.generation.system_prompt)
-            .map_err(|e| DpogenError::io("reading system prompt", e))?;
+            .map_err(|e| EpistemeError::io("reading system prompt", e))?;
 
         let judge_prompt = std::fs::read_to_string(&config.generation.judge_prompt)
-            .map_err(|e| DpogenError::io("reading judge prompt", e))?;
+            .map_err(|e| EpistemeError::io("reading judge prompt", e))?;
 
         let worker_pool = WorkerPool::new(
             Arc::clone(&client),
@@ -59,17 +59,17 @@ impl SftPipeline {
 
     /// Load problems from a JSONL file.
     pub fn load_problems(path: &Path) -> Result<Vec<Problem>> {
-        let file = File::open(path).map_err(|e| DpogenError::io("opening problems file", e))?;
+        let file = File::open(path).map_err(|e| EpistemeError::io("opening problems file", e))?;
         let reader = BufReader::new(file);
         let mut problems = Vec::new();
 
         for (line_num, line) in reader.lines().enumerate() {
-            let line = line.map_err(|e| DpogenError::io("reading problems file", e))?;
+            let line = line.map_err(|e| EpistemeError::io("reading problems file", e))?;
             if line.trim().is_empty() {
                 continue;
             }
             let problem: Problem = serde_json::from_str(&line)
-                .map_err(|e| DpogenError::ParseError(format!("Line {}: {}", line_num + 1, e)))?;
+                .map_err(|e| EpistemeError::ParseError(format!("Line {}: {}", line_num + 1, e)))?;
             problems.push(problem);
         }
 
@@ -100,7 +100,7 @@ impl SftPipeline {
 
         // Open output file
         let output_file =
-            File::create(output_path).map_err(|e| DpogenError::io("creating output file", e))?;
+            File::create(output_path).map_err(|e| EpistemeError::io("creating output file", e))?;
         let mut writer = BufWriter::new(output_file);
 
         let mut stats = RunStats {
@@ -150,11 +150,11 @@ impl SftPipeline {
                         );
 
                         let json = serde_json::to_string(&sft_sample).map_err(|e| {
-                            DpogenError::Internal(format!("Failed to serialize sample: {e}"))
+                            EpistemeError::Internal(format!("Failed to serialize sample: {e}"))
                         })?;
 
                         writeln!(writer, "{json}")
-                            .map_err(|e| DpogenError::io("writing output", e))?;
+                            .map_err(|e| EpistemeError::io("writing output", e))?;
                     }
                     Verdict::Reject => {
                         rejected_count += 1;
@@ -169,11 +169,11 @@ impl SftPipeline {
                             );
 
                             let json = serde_json::to_string(&sft_sample).map_err(|e| {
-                                DpogenError::Internal(format!("Failed to serialize sample: {e}"))
+                                EpistemeError::Internal(format!("Failed to serialize sample: {e}"))
                             })?;
 
                             writeln!(writer, "{json}")
-                                .map_err(|e| DpogenError::io("writing output", e))?;
+                                .map_err(|e| EpistemeError::io("writing output", e))?;
                         }
                     }
                 }
@@ -182,7 +182,7 @@ impl SftPipeline {
             // Flush periodically
             writer
                 .flush()
-                .map_err(|e| DpogenError::io("flushing output", e))?;
+                .map_err(|e| EpistemeError::io("flushing output", e))?;
 
             // Update progress
             pb.set_position(batch_end as u64);
@@ -194,7 +194,7 @@ impl SftPipeline {
         // Finalize
         writer
             .flush()
-            .map_err(|e| DpogenError::io("flushing output", e))?;
+            .map_err(|e| EpistemeError::io("flushing output", e))?;
         pb.finish_with_message(format!(
             "Done! {approved_count} approved, {rejected_count} rejected"
         ));
@@ -267,7 +267,7 @@ impl SftPipeline {
             .create(true)
             .append(true)
             .open(output_path)
-            .map_err(|e| DpogenError::io("opening output file", e))?;
+            .map_err(|e| EpistemeError::io("opening output file", e))?;
         let mut writer = BufWriter::new(output_file);
 
         // Process in batches
@@ -319,11 +319,11 @@ impl SftPipeline {
                         );
 
                         let json = serde_json::to_string(&sft_sample).map_err(|e| {
-                            DpogenError::Internal(format!("Failed to serialize sample: {e}"))
+                            EpistemeError::Internal(format!("Failed to serialize sample: {e}"))
                         })?;
 
                         writeln!(writer, "{json}")
-                            .map_err(|e| DpogenError::io("writing output", e))?;
+                            .map_err(|e| EpistemeError::io("writing output", e))?;
 
                         checkpoint.mark_judged(
                             &problem_id,
@@ -344,11 +344,11 @@ impl SftPipeline {
                             );
 
                             let json = serde_json::to_string(&sft_sample).map_err(|e| {
-                                DpogenError::Internal(format!("Failed to serialize sample: {e}"))
+                                EpistemeError::Internal(format!("Failed to serialize sample: {e}"))
                             })?;
 
                             writeln!(writer, "{json}")
-                                .map_err(|e| DpogenError::io("writing output", e))?;
+                                .map_err(|e| EpistemeError::io("writing output", e))?;
                         }
 
                         checkpoint.mark_judged(
@@ -364,7 +364,7 @@ impl SftPipeline {
             // Flush periodically
             writer
                 .flush()
-                .map_err(|e| DpogenError::io("flushing output", e))?;
+                .map_err(|e| EpistemeError::io("flushing output", e))?;
 
             // Update progress
             pb.set_position((already_done + batch_end) as u64);
@@ -376,7 +376,7 @@ impl SftPipeline {
         // Finalize
         writer
             .flush()
-            .map_err(|e| DpogenError::io("flushing output", e))?;
+            .map_err(|e| EpistemeError::io("flushing output", e))?;
         pb.finish_with_message(format!(
             "Done! {approved_count} approved, {rejected_count} rejected"
         ));

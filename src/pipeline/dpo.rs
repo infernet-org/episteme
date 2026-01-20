@@ -9,7 +9,7 @@
 use crate::checkpoint::CheckpointManager;
 use crate::client::OpenRouterClient;
 use crate::models::{
-    Config, DpoPair, DpogenError, JudgeResult, Problem, Result, RunStats, Sample, Verdict,
+    Config, DpoPair, EpistemeError, JudgeResult, Problem, Result, RunStats, Sample, Verdict,
 };
 use crate::pool::{JudgePool, WorkerPool};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -35,10 +35,10 @@ impl DpoPipeline {
     pub fn new(config: Config, client: Arc<OpenRouterClient>) -> Result<Self> {
         // Load prompts
         let system_prompt = std::fs::read_to_string(&config.generation.system_prompt)
-            .map_err(|e| DpogenError::io("reading system prompt", e))?;
+            .map_err(|e| EpistemeError::io("reading system prompt", e))?;
 
         let judge_prompt = std::fs::read_to_string(&config.generation.judge_prompt)
-            .map_err(|e| DpogenError::io("reading judge prompt", e))?;
+            .map_err(|e| EpistemeError::io("reading judge prompt", e))?;
 
         let worker_pool = WorkerPool::new(
             Arc::clone(&client),
@@ -68,17 +68,17 @@ impl DpoPipeline {
 
     /// Load problems from a JSONL file.
     pub fn load_problems(path: &Path) -> Result<Vec<Problem>> {
-        let file = File::open(path).map_err(|e| DpogenError::io("opening problems file", e))?;
+        let file = File::open(path).map_err(|e| EpistemeError::io("opening problems file", e))?;
         let reader = BufReader::new(file);
         let mut problems = Vec::new();
 
         for (line_num, line) in reader.lines().enumerate() {
-            let line = line.map_err(|e| DpogenError::io("reading problems file", e))?;
+            let line = line.map_err(|e| EpistemeError::io("reading problems file", e))?;
             if line.trim().is_empty() {
                 continue;
             }
             let problem: Problem = serde_json::from_str(&line)
-                .map_err(|e| DpogenError::ParseError(format!("Line {}: {}", line_num + 1, e)))?;
+                .map_err(|e| EpistemeError::ParseError(format!("Line {}: {}", line_num + 1, e)))?;
             problems.push(problem);
         }
 
@@ -149,7 +149,7 @@ impl DpoPipeline {
 
         // Open output file
         let output_file =
-            File::create(output_path).map_err(|e| DpogenError::io("creating output file", e))?;
+            File::create(output_path).map_err(|e| EpistemeError::io("creating output file", e))?;
         let mut writer = BufWriter::new(output_file);
 
         let mut stats = RunStats {
@@ -200,10 +200,11 @@ impl DpoPipeline {
                 pairs_created += 1;
                 stats.total_approved += 1;
 
-                let json = serde_json::to_string(&pair)
-                    .map_err(|e| DpogenError::Internal(format!("Failed to serialize pair: {e}")))?;
+                let json = serde_json::to_string(&pair).map_err(|e| {
+                    EpistemeError::Internal(format!("Failed to serialize pair: {e}"))
+                })?;
 
-                writeln!(writer, "{json}").map_err(|e| DpogenError::io("writing output", e))?;
+                writeln!(writer, "{json}").map_err(|e| EpistemeError::io("writing output", e))?;
             } else {
                 pairs_skipped += 1;
                 stats.total_rejected += 1;
@@ -213,7 +214,7 @@ impl DpoPipeline {
             if (idx + 1) % 10 == 0 {
                 writer
                     .flush()
-                    .map_err(|e| DpogenError::io("flushing output", e))?;
+                    .map_err(|e| EpistemeError::io("flushing output", e))?;
             }
 
             // Update progress
@@ -224,7 +225,7 @@ impl DpoPipeline {
         // Finalize
         writer
             .flush()
-            .map_err(|e| DpogenError::io("flushing output", e))?;
+            .map_err(|e| EpistemeError::io("flushing output", e))?;
         pb.finish_with_message(format!(
             "Done! {pairs_created} pairs created, {pairs_skipped} skipped"
         ));
@@ -302,7 +303,7 @@ impl DpoPipeline {
             .create(true)
             .append(true)
             .open(output_path)
-            .map_err(|e| DpogenError::io("opening output file", e))?;
+            .map_err(|e| EpistemeError::io("opening output file", e))?;
         let mut writer = BufWriter::new(output_file);
 
         let mut pairs_created = 0;
@@ -353,10 +354,11 @@ impl DpoPipeline {
             if let Some(pair) = Self::create_pair(&problem, &judged) {
                 pairs_created += 1;
 
-                let json = serde_json::to_string(&pair)
-                    .map_err(|e| DpogenError::Internal(format!("Failed to serialize pair: {e}")))?;
+                let json = serde_json::to_string(&pair).map_err(|e| {
+                    EpistemeError::Internal(format!("Failed to serialize pair: {e}"))
+                })?;
 
-                writeln!(writer, "{json}").map_err(|e| DpogenError::io("writing output", e))?;
+                writeln!(writer, "{json}").map_err(|e| EpistemeError::io("writing output", e))?;
 
                 // Get the score from the chosen response
                 let chosen_score = judged
@@ -375,7 +377,7 @@ impl DpoPipeline {
             if (idx + 1) % 10 == 0 {
                 writer
                     .flush()
-                    .map_err(|e| DpogenError::io("flushing output", e))?;
+                    .map_err(|e| EpistemeError::io("flushing output", e))?;
             }
 
             // Update progress
@@ -386,7 +388,7 @@ impl DpoPipeline {
         // Finalize
         writer
             .flush()
-            .map_err(|e| DpogenError::io("flushing output", e))?;
+            .map_err(|e| EpistemeError::io("flushing output", e))?;
         pb.finish_with_message(format!(
             "Done! {pairs_created} pairs created, {pairs_skipped} skipped"
         ));

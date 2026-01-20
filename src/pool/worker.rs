@@ -7,7 +7,7 @@
 //! - I^R: Model selection strategy is configurable
 
 use crate::client::OpenRouterClient;
-use crate::models::{DpogenError, ModelSpec, Problem, Result, Sample};
+use crate::models::{EpistemeError, ModelSpec, Problem, Result, Sample};
 use chrono::Utc;
 use regex::Regex;
 use std::sync::Arc;
@@ -108,7 +108,7 @@ impl WorkerPool {
             .semaphore
             .acquire()
             .await
-            .map_err(|_| DpogenError::Internal("Semaphore closed".to_string()))?;
+            .map_err(|_| EpistemeError::Internal("Semaphore closed".to_string()))?;
 
         let model = self.select_model();
         let start = Instant::now();
@@ -224,7 +224,7 @@ impl WorkerPoolHandle {
             .semaphore
             .acquire()
             .await
-            .map_err(|_| DpogenError::Internal("Semaphore closed".to_string()))?;
+            .map_err(|_| EpistemeError::Internal("Semaphore closed".to_string()))?;
 
         let model = self.select_model();
         let start = Instant::now();

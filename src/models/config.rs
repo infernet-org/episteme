@@ -1,4 +1,4 @@
-//! Configuration models for dpogen.
+//! Configuration models for episteme.
 //!
 //! All I^R (resolvable ignorance) is parameterized here.
 //! The user resolves these unknowns at runtime via config file.
@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// Top-level configuration for dpogen.
+/// Top-level configuration for episteme.
 ///
 /// I^R resolved: All configurable parameters are explicit.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -6,7 +6,7 @@
 //! - B_i: Checkpoint file may not exist → Option
 //! - I^B: Crash during write → backup file provides recovery
 
-use crate::models::{DpogenError, Problem, Result, RunStats, Verdict};
+use crate::models::{EpistemeError, Problem, Result, RunStats, Verdict};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -228,7 +228,7 @@ pub struct CheckpointManager {
 impl CheckpointManager {
     /// Create a new checkpoint manager.
     pub fn new(dir: &Path) -> Result<Self> {
-        fs::create_dir_all(dir).map_err(|e| DpogenError::io("creating checkpoint dir", e))?;
+        fs::create_dir_all(dir).map_err(|e| EpistemeError::io("creating checkpoint dir", e))?;
 
         Ok(Self {
             dir: dir.to_path_buf(),
@@ -267,10 +267,10 @@ impl CheckpointManager {
     /// Load checkpoint from disk.
     pub fn load(&mut self) -> Result<&CheckpointState> {
         let file = File::open(&self.checkpoint_path)
-            .map_err(|e| DpogenError::io("opening checkpoint", e))?;
+            .map_err(|e| EpistemeError::io("opening checkpoint", e))?;
         let reader = BufReader::new(file);
         let state: CheckpointState = serde_json::from_reader(reader)
-            .map_err(|e| DpogenError::ParseError(format!("Invalid checkpoint: {e}")))?;
+            .map_err(|e| EpistemeError::ParseError(format!("Invalid checkpoint: {e}")))?;
 
         self.state = Some(state);
         Ok(self.state.as_ref().unwrap())
@@ -281,25 +281,25 @@ impl CheckpointManager {
         let state = self
             .state
             .as_ref()
-            .ok_or_else(|| DpogenError::Internal("No checkpoint state to save".to_string()))?;
+            .ok_or_else(|| EpistemeError::Internal("No checkpoint state to save".to_string()))?;
 
         // Backup existing checkpoint
         if self.checkpoint_path.exists() {
             fs::copy(&self.checkpoint_path, &self.backup_path)
-                .map_err(|e| DpogenError::io("backing up checkpoint", e))?;
+                .map_err(|e| EpistemeError::io("backing up checkpoint", e))?;
         }
 
         // Write to temp file
         let temp_path = self.dir.join("checkpoint.tmp.json");
-        let file =
-            File::create(&temp_path).map_err(|e| DpogenError::io("creating temp checkpoint", e))?;
+        let file = File::create(&temp_path)
+            .map_err(|e| EpistemeError::io("creating temp checkpoint", e))?;
         let writer = BufWriter::new(file);
         serde_json::to_writer_pretty(writer, state)
-            .map_err(|e| DpogenError::Internal(format!("Serializing checkpoint: {e}")))?;
+            .map_err(|e| EpistemeError::Internal(format!("Serializing checkpoint: {e}")))?;
 
         // Atomic rename
         fs::rename(&temp_path, &self.checkpoint_path)
-            .map_err(|e| DpogenError::io("renaming checkpoint", e))?;
+            .map_err(|e| EpistemeError::io("renaming checkpoint", e))?;
 
         debug!("Checkpoint saved");
         Ok(())

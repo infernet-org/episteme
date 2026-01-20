@@ -1,4 +1,4 @@
-//! Error types for dpogen.
+//! Error types for episteme.
 //!
 //! Epistemic taxonomy:
 //! - B_i falsified: Expected failures (not found, invalid input)
@@ -7,9 +7,9 @@
 
 use thiserror::Error;
 
-/// Top-level error type for dpogen.
+/// Top-level error type for episteme.
 #[derive(Debug, Error)]
-pub enum DpogenError {
+pub enum EpistemeError {
     // ═══════════════════════════════════════════════════════════════════
     // B_i FALSIFIED — Belief proven wrong (expected failures)
     // ═══════════════════════════════════════════════════════════════════
@@ -91,7 +91,7 @@ pub enum OpenRouterError {
     MaxRetriesExceeded { attempts: u32, last_error: String },
 }
 
-impl DpogenError {
+impl EpistemeError {
     /// Create an IO error with context.
     pub fn io(context: impl Into<String>, source: std::io::Error) -> Self {
         Self::Io {
@@ -123,5 +123,5 @@ impl DpogenError {
     }
 }
 
-/// Result type alias for dpogen.
-pub type Result<T> = std::result::Result<T, DpogenError>;
+/// Result type alias for episteme.
+pub type Result<T> = std::result::Result<T, EpistemeError>;

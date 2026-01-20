@@ -1,18 +1,18 @@
-//! dpogen CLI - Dataset generation for SFT/DPO training.
+//! episteme CLI - Epistemic dataset generation for SFT/DPO training.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use dpogen::{CheckpointManager, Config, DpoPipeline, OpenRouterClient, SftPipeline};
+use episteme::{CheckpointManager, Config, DpoPipeline, OpenRouterClient, SftPipeline};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tracing::{Level, info};
 use tracing_subscriber::FmtSubscriber;
 
 #[derive(Parser)]
-#[command(name = "dpogen")]
+#[command(name = "episteme")]
 #[command(author = "Infernet <dev@infernet.org>")]
 #[command(version)]
-#[command(about = "Rust-native dataset generation for SFT/DPO training via OpenRouter")]
+#[command(about = "Epistemic dataset generation for SFT/DPO training via OpenRouter")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -81,7 +81,7 @@ fn setup_logging(verbose: bool) {
 }
 
 fn print_example_config() {
-    let example = r#"# dpogen configuration file
+    let example = r#"# episteme configuration file
 
 [openrouter]
 # API key (can also use OPENROUTER_API_KEY env var)

@@ -7,7 +7,7 @@
 //! - I^B: Network availability unknowable → retry with backoff
 
 use crate::client::RateLimiter;
-use crate::models::{DpogenError, ModelSpec, OpenRouterError, Result};
+use crate::models::{EpistemeError, ModelSpec, OpenRouterError, Result};
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -149,7 +149,7 @@ impl OpenRouterClient {
         let client = reqwest::Client::builder()
             .timeout(timeout)
             .build()
-            .map_err(DpogenError::Network)?;
+            .map_err(EpistemeError::Network)?;
 
         Ok(Self {
             client,
@@ -179,9 +179,9 @@ impl OpenRouterClient {
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             "HTTP-Referer",
-            HeaderValue::from_static("https://github.com/infernet-org/dpogen"),
+            HeaderValue::from_static("https://github.com/infernet-org/episteme"),
         );
-        headers.insert("X-Title", HeaderValue::from_static("dpogen"));
+        headers.insert("X-Title", HeaderValue::from_static("episteme"));
         headers
     }
 
@@ -217,7 +217,7 @@ impl OpenRouterClient {
         };
 
         let url = format!("{}/chat/completions", self.base_url);
-        let mut last_error: Option<DpogenError> = None;
+        let mut last_error: Option<EpistemeError> = None;
 
         for attempt in 0..self.max_retries {
             // Wait if rate limited
@@ -235,9 +235,9 @@ impl OpenRouterClient {
                 Ok(r) => r,
                 Err(e) => {
                     if e.is_timeout() {
-                        last_error = Some(DpogenError::Timeout(self.timeout));
+                        last_error = Some(EpistemeError::Timeout(self.timeout));
                     } else {
-                        last_error = Some(DpogenError::Network(e));
+                        last_error = Some(EpistemeError::Network(e));
                     }
                     if attempt < self.max_retries - 1 {
                         let backoff = Duration::from_secs(2u64.pow(attempt));
@@ -267,7 +267,7 @@ impl OpenRouterClient {
                     .and_then(|s| s.parse::<f64>().ok())
                     .unwrap_or(1.0);
 
-                last_error = Some(DpogenError::RateLimited {
+                last_error = Some(EpistemeError::RateLimited {
                     retry_after_secs: retry_after,
                 });
 
@@ -304,7 +304,7 @@ impl OpenRouterClient {
                         }
                     };
 
-                last_error = Some(DpogenError::OpenRouterApi(error));
+                last_error = Some(EpistemeError::OpenRouterApi(error));
 
                 // Don't retry auth errors or not found
                 if status == 401 || status == 404 {
@@ -322,13 +322,13 @@ impl OpenRouterClient {
             let body: ChatCompletionResponse = response
                 .json()
                 .await
-                .map_err(|e| DpogenError::ParseError(format!("Failed to parse response: {e}")))?;
+                .map_err(|e| EpistemeError::ParseError(format!("Failed to parse response: {e}")))?;
 
             let content = body
                 .choices
                 .first()
                 .map(|c| c.message.content.clone())
-                .ok_or_else(|| DpogenError::ParseError("No choices in response".to_string()))?;
+                .ok_or_else(|| EpistemeError::ParseError("No choices in response".to_string()))?;
 
             let usage = body.usage.unwrap_or(ChatUsage {
                 prompt_tokens: 0,
@@ -359,7 +359,7 @@ impl OpenRouterClient {
 
         // All retries exhausted
         Err(last_error.unwrap_or_else(|| {
-            DpogenError::OpenRouterApi(OpenRouterError::MaxRetriesExceeded {
+            EpistemeError::OpenRouterApi(OpenRouterError::MaxRetriesExceeded {
                 attempts: self.max_retries,
                 last_error: "Unknown error".to_string(),
             })

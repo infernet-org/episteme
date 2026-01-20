@@ -1,8 +1,8 @@
-//! dpogen - Rust-native dataset generation for SFT/DPO training via OpenRouter.
+//! episteme - Epistemic dataset generation for SFT/DPO training via OpenRouter.
 //!
 //! ## Architecture
 //!
-//! dpogen uses two logical pools:
+//! episteme uses two logical pools:
 //! - **Worker Pool**: Generates samples by calling OpenRouter models
 //! - **Judge Pool**: Evaluates samples using LLM-based criteria
 //!
@@ -27,6 +27,6 @@ pub mod pool;
 // Re-exports for convenience
 pub use checkpoint::{CheckpointManager, CheckpointState};
 pub use client::{OpenRouterClient, RateLimiter};
-pub use models::{Config, DpogenError, Problem, Result, Sample, Verdict};
+pub use models::{Config, EpistemeError, Problem, Result, Sample, Verdict};
 pub use pipeline::{DpoPipeline, SftPipeline};
 pub use pool::{JudgePool, WorkerPool};

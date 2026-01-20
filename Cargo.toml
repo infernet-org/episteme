@@ -1,12 +1,12 @@
 [package]
-name = "dpogen"
+name = "episteme"
 version = "0.1.0"
 edition = "2024"
 authors = ["Infernet <dev@infernet.org>"]
-description = "Rust-native dataset generation for SFT/DPO training via OpenRouter"
+description = "Epistemic dataset generation for SFT/DPO training via OpenRouter"
 license = "Apache-2.0"
-repository = "https://github.com/infernet-org/dpogen"
-keywords = ["llm", "dpo", "sft", "dataset", "openrouter"]
+repository = "https://github.com/infernet-org/episteme"
+keywords = ["llm", "dpo", "sft", "dataset", "openrouter", "epistemic"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]

@@ -1,4 +1,4 @@
-//! Sample and result types for dpogen.
+//! Sample and result types for episteme.
 //!
 //! K_i: These types represent the core data flow through the pipeline.
 
