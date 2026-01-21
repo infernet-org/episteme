@@ -1,19 +1,70 @@
 # episteme configuration file
+#
+# Epistemic foundation:
+# - K_i: All endpoints must be OpenAI-compatible
+# - K_i: OpenRouter is the default endpoint
+# - B_i: Endpoints are reachable (verified via health checks)
 
+# ============================================================================
+# OpenRouter (primary endpoint, always available)
+# ============================================================================
 [openrouter]
 # API key (can also use OPENROUTER_API_KEY env var)
 # api_key = "sk-..."
+api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
 timeout_secs = 180
 max_retries = 3
 
+# ============================================================================
+# Additional endpoints (optional) - for on-prem or other aggregators
+# ============================================================================
+# 
+# Ollama (local):
+# [endpoints.ollama]
+# base_url = "http://localhost:11434/v1"
+#
+# vLLM (on-prem GPU server):
+# [endpoints.vllm]
+# base_url = "http://gpu-server:8000/v1"
+# headers = { "X-Episteme-Auth" = "${VLLM_API_KEY}" }
+#
+# TGI (HuggingFace Text Generation Inference):
+# [endpoints.tgi]
+# base_url = "http://localhost:3000/v1"
+# api_key_env = "TGI_API_KEY"
+#
+# Together AI (aggregator):
+# [endpoints.together]
+# base_url = "https://api.together.xyz/v1"
+# api_key_env = "TOGETHER_API_KEY"
+#
+# Fireworks AI (aggregator):
+# [endpoints.fireworks]
+# base_url = "https://api.fireworks.ai/inference/v1"
+# api_key_env = "FIREWORKS_API_KEY"
+#
+# Groq (aggregator with LPU):
+# [endpoints.groq]
+# base_url = "https://api.groq.com/openai/v1"
+# api_key_env = "GROQ_API_KEY"
+
+# ============================================================================
+# Worker pool (generation)
+# ============================================================================
 [workers]
 size = 10
 models = [
+    # OpenRouter models (default endpoint)
     { id = "deepseek/deepseek-r1", label = "DS-R1", weight = 2, input_price_per_1m = 0.70, output_price_per_1m = 2.50, max_tokens = 4096, temperature = 0.7 },
     { id = "anthropic/claude-sonnet-4", label = "Sonnet", weight = 1, input_price_per_1m = 3.0, output_price_per_1m = 15.0, max_tokens = 4096, temperature = 0.7 },
+    # On-prem model example (uncomment [endpoints.ollama] above):
+    # { endpoint = "ollama", id = "llama3.3:70b", label = "Llama-Local", weight = 1, max_tokens = 4096 },
 ]
 
+# ============================================================================
+# Judge pool (evaluation)
+# ============================================================================
 [judges]
 size = 5
 models = [
@@ -32,12 +83,18 @@ disagreement_threshold = 0.15  # std_dev >= this marks "low confidence"
 hierarchical = false        # If true: cheap judge first, ensemble only if uncertain
 uncertain_range = [0.4, 0.7]   # Score range that triggers full ensemble in hierarchical mode
 
+# ============================================================================
+# Generation settings
+# ============================================================================
 [generation]
 system_prompt = "prompts/system.md"
 judge_prompt = "prompts/judge.md"
 approval_threshold = 0.85
 responses_per_problem = 3  # For DPO: generate N responses per problem
 
+# ============================================================================
+# Output settings
+# ============================================================================
 [output]
 path = "output/dataset.jsonl"
 # checkpoint_dir = "checkpoints/"

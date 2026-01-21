@@ -2,17 +2,16 @@
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use episteme::{CheckpointManager, Config, DpoPipeline, OpenRouterClient, SftPipeline};
+use episteme::{CheckpointManager, Config, DpoPipeline, EndpointRegistry, SftPipeline};
 use std::path::PathBuf;
-use std::sync::Arc;
-use tracing::{Level, info};
+use tracing::{Level, info, warn};
 use tracing_subscriber::FmtSubscriber;
 
 #[derive(Parser)]
 #[command(name = "episteme")]
-#[command(author = "Infernet <dev@infernet.org>")]
+#[command(author = "INFERNET <in@infernet.org>")]
 #[command(version)]
-#[command(about = "Epistemic dataset generation for SFT/DPO training via OpenRouter")]
+#[command(about = "Epistemic dataset generation for SFT/DPO training")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -24,6 +23,10 @@ struct Cli {
     /// Verbose output
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    /// Skip endpoint health checks
+    #[arg(long, global = true)]
+    skip_health_check: bool,
 }
 
 #[derive(Subcommand)]
@@ -65,6 +68,9 @@ enum Commands {
     /// Validate configuration file
     Validate,
 
+    /// Run health checks on all configured endpoints
+    Health,
+
     /// Show example configuration
     Example,
 }
@@ -83,18 +89,35 @@ fn setup_logging(verbose: bool) {
 fn print_example_config() {
     let example = r#"# episteme configuration file
 
+# OpenRouter (primary endpoint, always available)
 [openrouter]
 # API key (can also use OPENROUTER_API_KEY env var)
 # api_key = "sk-..."
+api_key_env = "OPENROUTER_API_KEY"
 base_url = "https://openrouter.ai/api/v1"
 timeout_secs = 180
 max_retries = 3
 
+# Additional endpoints (optional) - for on-prem or other aggregators
+# [endpoints.local]
+# base_url = "http://localhost:11434/v1"  # Ollama
+# 
+# [endpoints.vllm]
+# base_url = "http://gpu-server:8000/v1"
+# headers = { "X-Episteme-Auth" = "${VLLM_API_KEY}" }
+#
+# [endpoints.together]
+# base_url = "https://api.together.xyz/v1"
+# api_key_env = "TOGETHER_API_KEY"
+
 [workers]
 size = 10
 models = [
+    # OpenRouter models (default endpoint)
     { id = "deepseek/deepseek-r1", weight = 2, input_price_per_1m = 0.70, output_price_per_1m = 2.50 },
     { id = "anthropic/claude-sonnet-4", weight = 1, input_price_per_1m = 3.0, output_price_per_1m = 15.0 },
+    # On-prem model example (uncomment [endpoints.local] above)
+    # { endpoint = "local", id = "llama3.3:70b", weight = 1 },
 ]
 
 [judges]
@@ -102,6 +125,13 @@ size = 5
 models = [
     { id = "openai/gpt-4o", weight = 1, input_price_per_1m = 2.5, output_price_per_1m = 10.0, temperature = 0.3 },
 ]
+
+# Ensemble judging (optional)
+[judges.ensemble]
+enabled = false
+num_judges = 3
+strategy = "median"
+disagreement_threshold = 0.15
 
 [generation]
 system_prompt = "prompts/system.md"
@@ -118,6 +148,23 @@ track_costs = true
     println!("{example}");
 }
 
+/// Run health checks on all endpoints and print results.
+async fn run_health_checks(registry: &EndpointRegistry) -> bool {
+    println!("Checking endpoints...");
+    let (healthy, total, unhealthy) = registry.health_check_summary().await;
+
+    if healthy == total {
+        println!("  All {total} endpoint(s) healthy");
+        true
+    } else {
+        for name in &unhealthy {
+            println!("  Warning: endpoint '{name}' is not healthy");
+        }
+        println!("  {healthy}/{total} endpoint(s) healthy");
+        false
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -132,6 +179,11 @@ async fn main() -> Result<()> {
         Commands::Validate => {
             let config = Config::from_file(&cli.config)
                 .with_context(|| format!("Failed to load config from {:?}", cli.config))?;
+
+            // Validate endpoint references
+            config
+                .validate_endpoints()
+                .context("Invalid endpoint configuration")?;
 
             // Try to resolve API key
             config
@@ -153,6 +205,26 @@ async fn main() -> Result<()> {
                 "  Approval threshold: {:.0}%",
                 config.generation.approval_threshold * 100.0
             );
+
+            // Show endpoints
+            let endpoints = config.referenced_endpoints();
+            info!("  Endpoints: {}", endpoints.join(", "));
+
+            return Ok(());
+        }
+
+        Commands::Health => {
+            let config = Config::from_file(&cli.config)
+                .with_context(|| format!("Failed to load config from {:?}", cli.config))?;
+
+            let registry = EndpointRegistry::from_config(&config)
+                .context("Failed to create endpoint registry")?;
+
+            let all_healthy = run_health_checks(&registry).await;
+
+            if !all_healthy {
+                std::process::exit(1);
+            }
             return Ok(());
         }
 
@@ -164,17 +236,25 @@ async fn main() -> Result<()> {
             let config = Config::from_file(&cli.config)
                 .with_context(|| format!("Failed to load config from {:?}", cli.config))?;
 
-            let api_key = config
-                .resolve_api_key()
-                .context("Failed to resolve API key")?;
+            // Validate endpoint references
+            config
+                .validate_endpoints()
+                .context("Invalid endpoint configuration")?;
 
-            let client = Arc::new(OpenRouterClient::new(
-                api_key,
-                Some(config.openrouter.base_url.clone()),
-                Some(config.openrouter.timeout_secs),
-                Some(config.openrouter.max_retries),
-                None,
-            )?);
+            // Build endpoint registry
+            let registry = EndpointRegistry::from_config(&config)
+                .context("Failed to create endpoint registry")?;
+
+            // Run health checks unless skipped
+            if !cli.skip_health_check {
+                let all_healthy = run_health_checks(&registry).await;
+                if !all_healthy {
+                    warn!("Some endpoints are not healthy, continuing anyway...");
+                }
+            }
+
+            // Get OpenRouter client (for now, all models use openrouter by default)
+            let client = registry.openrouter().clone();
 
             let pipeline = SftPipeline::new(config, client)?;
             let problems_data = SftPipeline::load_problems(&problems)?;
@@ -223,17 +303,25 @@ async fn main() -> Result<()> {
             // Override responses_per_problem from CLI
             config.generation.responses_per_problem = responses;
 
-            let api_key = config
-                .resolve_api_key()
-                .context("Failed to resolve API key")?;
+            // Validate endpoint references
+            config
+                .validate_endpoints()
+                .context("Invalid endpoint configuration")?;
 
-            let client = Arc::new(OpenRouterClient::new(
-                api_key,
-                Some(config.openrouter.base_url.clone()),
-                Some(config.openrouter.timeout_secs),
-                Some(config.openrouter.max_retries),
-                None,
-            )?);
+            // Build endpoint registry
+            let registry = EndpointRegistry::from_config(&config)
+                .context("Failed to create endpoint registry")?;
+
+            // Run health checks unless skipped
+            if !cli.skip_health_check {
+                let all_healthy = run_health_checks(&registry).await;
+                if !all_healthy {
+                    warn!("Some endpoints are not healthy, continuing anyway...");
+                }
+            }
+
+            // Get OpenRouter client (for now, all models use openrouter by default)
+            let client = registry.openrouter().clone();
 
             let pipeline = DpoPipeline::new(config, client)?;
             let problems_data = DpoPipeline::load_problems(&problems)?;

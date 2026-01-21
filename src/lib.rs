@@ -1,10 +1,17 @@
-//! episteme - Epistemic dataset generation for SFT/DPO training via OpenRouter.
+//! episteme - Epistemic dataset generation for SFT/DPO training.
 //!
 //! ## Architecture
 //!
 //! episteme uses two logical pools:
-//! - **Worker Pool**: Generates samples by calling OpenRouter models
+//! - **Worker Pool**: Generates samples by calling LLM endpoints
 //! - **Judge Pool**: Evaluates samples using LLM-based criteria
+//!
+//! ## Supported Endpoints
+//!
+//! - **Aggregators**: OpenRouter (default), Together AI, Fireworks, Groq
+//! - **On-prem**: vLLM, TGI, Ollama, llama.cpp server
+//!
+//! All endpoints must be OpenAI-compatible (chat completions API).
 //!
 //! ## Pipelines
 //!
@@ -26,7 +33,9 @@ pub mod pool;
 
 // Re-exports for convenience
 pub use checkpoint::{CheckpointManager, CheckpointState};
-pub use client::{OpenRouterClient, RateLimiter};
+pub use client::{
+    EndpointRegistry, HealthCheckResult, HealthStatus, LLMClient, OpenRouterClient, RateLimiter,
+};
 pub use models::{Config, EpistemeError, Problem, Result, Sample, Verdict};
 pub use pipeline::{DpoPipeline, SftPipeline};
 pub use pool::{JudgePool, WorkerPool};

@@ -5,7 +5,16 @@
 [![CI](https://github.com/infernet-org/episteme/actions/workflows/test.yml/badge.svg)](https://github.com/infernet-org/episteme/actions/workflows/test.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-Epistemic dataset generation for RL training via OpenRouter.
+Epistemic dataset generation for RL training.
+
+## Supported Endpoints
+
+| Type | Examples | Status |
+|------|----------|--------|
+| **Aggregators** | OpenRouter (default), Together AI, Fireworks, Groq | Supported |
+| **On-prem** | vLLM, TGI, Ollama, llama.cpp server | Supported |
+
+All endpoints must be OpenAI-compatible (chat completions API).
 
 ## Epistemic Foundation
 
@@ -80,6 +89,61 @@ Every generated sample carries epistemic metadata that enables downstream filter
 | **Rate limiting** | K_i(API limits) | Adaptive backoff from observed 429s |
 | **Cost tracking** | K_i(token usage) | Real-time cost visibility |
 | **Ensemble judging** | B_i → K_i(HIGH) | Multi-judge consensus for higher confidence |
+| **Multi-endpoint** | K_i(endpoint health) | Support for on-prem and multiple aggregators |
+
+## Multi-Endpoint Support
+
+episteme supports multiple LLM endpoints simultaneously:
+
+```toml
+# OpenRouter (primary, always available)
+[openrouter]
+api_key_env = "OPENROUTER_API_KEY"
+base_url = "https://openrouter.ai/api/v1"
+
+# On-prem endpoints (optional)
+[endpoints.ollama]
+base_url = "http://localhost:11434/v1"
+
+[endpoints.vllm]
+base_url = "http://gpu-server:8000/v1"
+headers = { "X-Episteme-Auth" = "${VLLM_API_KEY}" }
+
+# Other aggregators (optional)
+[endpoints.together]
+base_url = "https://api.together.xyz/v1"
+api_key_env = "TOGETHER_API_KEY"
+
+# Models reference their endpoint (default: "openrouter")
+[workers]
+models = [
+    { id = "deepseek/deepseek-r1" },                    # OpenRouter (default)
+    { endpoint = "ollama", id = "llama3.3:70b" },       # Local Ollama
+    { endpoint = "vllm", id = "meta-llama/Llama-3-70B" }, # On-prem vLLM
+]
+```
+
+### Health Checks
+
+Before running pipelines, episteme verifies all endpoints are reachable:
+
+```bash
+# Check all endpoints
+episteme health -c config.toml
+
+# Skip health checks (for CI or offline testing)
+episteme sft --skip-health-check -c config.toml -p problems.jsonl -o out.jsonl
+```
+
+### Environment Variable Expansion
+
+Custom headers support `${VAR}` syntax for secrets:
+
+```toml
+[endpoints.vllm]
+base_url = "http://gpu-server:8000/v1"
+headers = { "X-Episteme-Auth" = "${VLLM_SECRET}" }  # Expanded at runtime
+```
 
 ## Ensemble Judging
 
