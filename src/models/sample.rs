@@ -77,6 +77,24 @@ pub enum Verdict {
     Reject,
 }
 
+/// Confidence level from ensemble judging.
+///
+/// Epistemic foundation:
+/// - High: Low disagreement + unanimous verdict → B_i(HIGH) approaches K_i
+/// - Medium: Low disagreement + majority verdict → B_i(MED)
+/// - Low: High disagreement (no consensus) → B_i(LOW), valuable as explicit uncertainty
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Confidence {
+    /// Low disagreement, unanimous verdict
+    #[default]
+    High,
+    /// Low disagreement, majority verdict
+    Medium,
+    /// High disagreement (no consensus) - valuable signal for downstream filtering
+    Low,
+}
+
 /// Result from the judge pool.
 ///
 /// K_i: Every judged sample has a score and verdict.
@@ -105,6 +123,81 @@ pub struct JudgeResult {
 
     /// Judging cost in USD
     pub judge_cost_usd: f64,
+}
+
+/// Result from ensemble judging (multiple judges per sample).
+///
+/// Epistemic foundation:
+/// - Aggregates multiple B_i(score) into higher-confidence result
+/// - Makes disagreement explicit via score_std_dev
+/// - Confidence level indicates strength of consensus
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnsembleJudgeResult {
+    /// ID of the sample that was judged
+    pub sample_id: String,
+
+    /// Aggregated score (median by default)
+    pub score: f64,
+
+    /// Consensus verdict (majority vote)
+    pub verdict: Verdict,
+
+    /// Confidence level based on judge agreement
+    pub confidence: Confidence,
+
+    /// Standard deviation of scores (disagreement measure)
+    pub score_std_dev: f64,
+
+    /// Individual judge results (for traceability)
+    pub individual_results: Vec<JudgeResult>,
+
+    /// Combined reasoning (from first/primary judge)
+    pub reasoning: String,
+
+    /// Models used for judging (comma-separated)
+    pub judge_models: String,
+
+    /// Timestamp of final result
+    pub judged_at: DateTime<Utc>,
+
+    /// Total judging time in milliseconds
+    pub judge_time_ms: u64,
+
+    /// Total cost of all judge calls
+    pub judge_cost_usd: f64,
+}
+
+impl From<JudgeResult> for EnsembleJudgeResult {
+    /// Wrap a single JudgeResult as an ensemble result.
+    ///
+    /// Used when ensemble is disabled to maintain consistent API.
+    fn from(r: JudgeResult) -> Self {
+        Self {
+            sample_id: r.sample_id.clone(),
+            score: r.score,
+            verdict: r.verdict,
+            confidence: Confidence::High, // Single judge assumed confident
+            score_std_dev: 0.0,
+            individual_results: vec![r.clone()],
+            reasoning: r.reasoning.clone(),
+            judge_models: r.judge_model.clone(),
+            judged_at: r.judged_at,
+            judge_time_ms: r.judge_time_ms,
+            judge_cost_usd: r.judge_cost_usd,
+        }
+    }
+}
+
+impl EnsembleJudgeResult {
+    /// Get individual scores as a vector.
+    pub fn individual_scores(&self) -> Vec<f64> {
+        self.individual_results.iter().map(|r| r.score).collect()
+    }
+
+    /// Get the number of judges used.
+    pub fn num_judges(&self) -> usize {
+        self.individual_results.len()
+    }
 }
 
 /// Quality flags for epistemic analysis of generated samples.
@@ -237,7 +330,7 @@ pub struct SftSample {
     /// Generation time in milliseconds
     pub generation_time_ms: u64,
 
-    /// Model used for judging
+    /// Model(s) used for judging (comma-separated if ensemble)
     pub judge_model: String,
 
     /// Explicit verdict from judge
@@ -246,6 +339,23 @@ pub struct SftSample {
     // === P2: Quality Signals (Epistemic) ===
     /// Quality flags for epistemic analysis
     pub quality_flags: QualityFlags,
+
+    // === P3: Ensemble Judging Metadata ===
+    /// Confidence level from ensemble judging
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_confidence: Option<Confidence>,
+
+    /// Score standard deviation (disagreement measure)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score_std_dev: Option<f64>,
+
+    /// Number of judges used
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_judges: Option<usize>,
+
+    /// Individual judge scores (for analysis)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub individual_scores: Option<Vec<f64>>,
 
     // === Cost & Metadata ===
     /// Total cost (generation + judging) in USD
@@ -258,13 +368,18 @@ pub struct SftSample {
 }
 
 impl SftSample {
-    /// Create an SFT sample from a sample and judge result.
+    /// Create an SFT sample from a sample and ensemble judge result.
     ///
     /// K_i: Preserves all metadata from generation and judging phases.
     /// This enables full traceability and epistemic analysis.
-    pub fn from_judged(sample: Sample, judge: JudgeResult, include_cost: bool) -> Self {
+    pub fn from_judged(sample: Sample, judge: EnsembleJudgeResult, include_cost: bool) -> Self {
         // Compute quality flags from output
         let quality_flags = QualityFlags::from_output(&sample.output);
+
+        // Extract ensemble metadata before moving judge
+        let is_ensemble = judge.num_judges() > 1;
+        let num_judges = judge.num_judges();
+        let individual_scores = judge.individual_scores();
 
         Self {
             // Core fields
@@ -283,11 +398,29 @@ impl SftSample {
 
             // P1: Efficiency & Provenance
             generation_time_ms: sample.generation_time_ms,
-            judge_model: judge.judge_model,
+            judge_model: judge.judge_models,
             verdict: judge.verdict,
 
             // P2: Quality Signals
             quality_flags,
+
+            // P3: Ensemble Metadata (only if ensemble was used)
+            judge_confidence: if is_ensemble {
+                Some(judge.confidence)
+            } else {
+                None
+            },
+            score_std_dev: if is_ensemble {
+                Some(judge.score_std_dev)
+            } else {
+                None
+            },
+            num_judges: if is_ensemble { Some(num_judges) } else { None },
+            individual_scores: if is_ensemble {
+                Some(individual_scores)
+            } else {
+                None
+            },
 
             // Cost & Metadata
             cost_usd: if include_cost {
@@ -347,9 +480,9 @@ impl DpoPair {
         problem_id: String,
         input: String,
         chosen_sample: &Sample,
-        chosen_judge: &JudgeResult,
+        chosen_judge: &EnsembleJudgeResult,
         rejected_sample: &Sample,
-        rejected_judge: &JudgeResult,
+        rejected_judge: &EnsembleJudgeResult,
         metadata: serde_json::Value,
     ) -> Self {
         Self {

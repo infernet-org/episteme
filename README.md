@@ -79,6 +79,77 @@ Every generated sample carries epistemic metadata that enables downstream filter
 | **Checkpointing** | K_i(progress state) | Resume with known-good state |
 | **Rate limiting** | K_i(API limits) | Adaptive backoff from observed 429s |
 | **Cost tracking** | K_i(token usage) | Real-time cost visibility |
+| **Ensemble judging** | B_i → K_i(HIGH) | Multi-judge consensus for higher confidence |
+
+## Ensemble Judging
+
+Single LLM judges are a known weakness - they can have blind spots, biases, or inconsistent scoring. Ensemble judging addresses this by using **multiple diverse judges** and aggregating their scores:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    ENSEMBLE JUDGING FLOW                        │
+│                                                                 │
+│  Sample ──► Judge 1 (GPT-4o)     ──► 0.90 ─┐                   │
+│         ──► Judge 2 (Claude)     ──► 0.88 ─┼─► Median: 0.88    │
+│         ──► Judge 3 (Gemini)     ──► 0.85 ─┘    σ: 0.025       │
+│                                              Confidence: HIGH   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Epistemic Benefits
+
+| Single Judge | Ensemble |
+|--------------|----------|
+| B_i(score) - one model's opinion | K_i(score) - consensus from diverse models |
+| Hidden bias | Bias exposed via disagreement |
+| No confidence metric | Explicit confidence from variance |
+| All-or-nothing | Hierarchical: cheap first, escalate if uncertain |
+
+### Configuration
+
+```toml
+[judges]
+size = 5
+models = [
+    { id = "openai/gpt-4o", label = "GPT-4o" },
+    { id = "anthropic/claude-sonnet-4", label = "Sonnet" },
+    { id = "google/gemini-2.0-flash-001", label = "Gemini" },
+]
+
+[judges.ensemble]
+enabled = true              # Enable multi-judge evaluation
+num_judges = 3              # Number of judges per sample
+strategy = "median"         # median | average | weightedaverage
+disagreement_threshold = 0.15  # std_dev >= this = low confidence
+hierarchical = false        # Cheap judge first, ensemble if uncertain
+uncertain_range = [0.4, 0.7]   # Score range triggering full ensemble
+```
+
+### Aggregation Strategies
+
+| Strategy | Formula | Best For |
+|----------|---------|----------|
+| `median` | Middle value | Default, robust to outliers |
+| `average` | Mean of scores | When all judges equally trusted |
+| `weightedaverage` | Weighted by model weights | When some judges more reliable |
+
+### Confidence Levels
+
+| Level | Criteria | Interpretation |
+|-------|----------|----------------|
+| `high` | σ < threshold AND unanimous verdict | Strong consensus, trust score |
+| `medium` | σ < threshold OR unanimous verdict | Moderate agreement |
+| `low` | σ >= threshold AND split verdict | Judges disagree, review manually |
+
+### Hierarchical Mode
+
+For cost optimization, enable `hierarchical = true`:
+
+1. **First**: Cheap/fast judge evaluates sample
+2. **If score in `uncertain_range`**: Full ensemble evaluation
+3. **Otherwise**: Accept cheap judge's verdict
+
+This reduces costs while maintaining quality for edge cases.
 
 ## Installation
 
@@ -132,7 +203,16 @@ models = [
 size = 5  # Concurrent judge workers
 models = [
     { id = "openai/gpt-4o", temperature = 0.3 },
+    { id = "anthropic/claude-sonnet-4", temperature = 0.3 },
+    { id = "google/gemini-2.0-flash-001", temperature = 0.3 },
 ]
+
+# Ensemble judging: B_i(single) → K_i(consensus)
+[judges.ensemble]
+enabled = true
+num_judges = 3
+strategy = "median"
+disagreement_threshold = 0.15
 
 # B_i: Generation parameters (tune based on observed quality)
 [generation]
@@ -170,14 +250,18 @@ Each sample carries full epistemic metadata:
   "output": "The sum of 2 + 2 is 4...",
   "answer": "4",
   "model": "deepseek/deepseek-r1",
-  "score": 0.92,
+  "score": 0.88,
   "problem_id": "prob_001",
   "tokens_in": 1265,
   "tokens_out": 1572,
   "judge_reasoning": "The reasoning is thorough...",
   "generation_time_ms": 5336,
-  "judge_model": "openai/gpt-4o",
+  "judge_model": "openai/gpt-4o,anthropic/claude-sonnet-4,google/gemini-2.0-flash-001",
   "verdict": "approve",
+  "judge_confidence": "high",
+  "score_std_dev": 0.025,
+  "num_judges": 3,
+  "individual_scores": [0.90, 0.88, 0.85],
   "quality_flags": {
     "truncated": false,
     "has_answer_tags": true,
@@ -202,8 +286,12 @@ Each sample carries full epistemic metadata:
 | `tokens_in` | int | K_i | Input tokens consumed |
 | `tokens_out` | int | K_i | Output tokens generated |
 | `generation_time_ms` | int | K_i | Generation latency |
-| `judge_model` | string | K_i | Model used for judging |
+| `judge_model` | string | K_i | Model(s) used for judging (comma-separated if ensemble) |
 | `verdict` | string | K_i | `"approve"` or `"reject"` |
+| `judge_confidence` | string? | K_i | Ensemble confidence: `"high"`, `"medium"`, `"low"` |
+| `score_std_dev` | float? | K_i | Standard deviation of judge scores (ensemble) |
+| `num_judges` | int? | K_i | Number of judges used (ensemble) |
+| `individual_scores` | float[]? | K_i | Individual judge scores (ensemble) |
 | `cost_usd` | float? | K_i | Total cost (generation + judging) |
 
 ### Field Reference (B_i: Inferred Beliefs)
