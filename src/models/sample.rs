@@ -83,21 +83,16 @@ pub enum Verdict {
 /// - High: Low disagreement + unanimous verdict → B_i(HIGH) approaches K_i
 /// - Medium: Low disagreement + majority verdict → B_i(MED)
 /// - Low: High disagreement (no consensus) → B_i(LOW), valuable as explicit uncertainty
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Confidence {
     /// Low disagreement, unanimous verdict
+    #[default]
     High,
     /// Low disagreement, majority verdict
     Medium,
     /// High disagreement (no consensus) - valuable signal for downstream filtering
     Low,
-}
-
-impl Default for Confidence {
-    fn default() -> Self {
-        Self::High
-    }
 }
 
 /// Result from the judge pool.
