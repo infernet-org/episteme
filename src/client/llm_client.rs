@@ -1,15 +1,17 @@
-//! OpenRouter API client.
+//! Generic LLM client for OpenAI-compatible endpoints.
 //!
 //! Epistemic foundation:
-//! - K_i: OpenRouter provides unified access to frontier models
+//! - K_i: OpenAI API schema is the de facto standard
+//! - K_i: Aggregators (OpenRouter) and on-prem (vLLM, Ollama) all support it
 //! - B_i: API will respond within timeout (might fail)
 //! - B_i: Response will be valid JSON (might fail)
 //! - I^B: Network availability unknowable → retry with backoff
 
 use crate::client::RateLimiter;
 use crate::models::{EpistemeError, ModelSpec, OpenRouterError, Result};
-use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderName, HeaderValue};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -81,7 +83,7 @@ struct ChatUsage {
     total_tokens: u32,
 }
 
-/// OpenRouter API error response.
+/// API error response (OpenAI-compatible).
 #[derive(Debug, Deserialize)]
 struct ApiErrorResponse {
     error: ApiErrorDetail,
@@ -97,6 +99,9 @@ struct ApiErrorDetail {
 }
 
 /// Response from a completion request.
+///
+/// Contains the generated content along with usage metrics and cost tracking.
+/// All fields are populated from the API response.
 #[derive(Debug, Clone)]
 pub struct CompletionResponse {
     /// Generated content
@@ -115,19 +120,58 @@ pub struct CompletionResponse {
     pub duration: Duration,
 }
 
-/// OpenRouter API client.
+/// Generic LLM client for any OpenAI-compatible endpoint.
+///
+/// Supports:
+/// - OpenRouter (aggregator)
+/// - Together AI, Fireworks, Groq (aggregators)
+/// - vLLM, TGI, Ollama, llama.cpp (on-prem)
 ///
 /// Features:
 /// - Automatic rate limit handling with adaptive backoff
 /// - Response header parsing for proactive throttling
 /// - Cost tracking
 /// - Retry with exponential backoff
-pub struct OpenRouterClient {
+/// - Custom headers for auth flexibility
+///
+/// # Example
+///
+/// ```ignore
+/// use episteme::LLMClient;
+/// use std::collections::HashMap;
+///
+/// // Create an OpenRouter client
+/// let client = LLMClient::openrouter(
+///     "sk-or-...".to_string(),
+///     None, None, None, None,
+/// )?;
+///
+/// // Or create a custom endpoint client (e.g., local Ollama)
+/// let local_client = LLMClient::new(
+///     "ollama".to_string(),
+///     None,  // No API key for local
+///     "http://localhost:11434/v1".to_string(),
+///     HashMap::new(),
+///     180,  // timeout_secs
+///     3,    // max_retries
+///     None,
+/// )?;
+/// ```
+pub struct LLMClient {
     client: reqwest::Client,
-    api_key: String,
+    /// Name of this endpoint (for logging)
+    name: String,
+    /// API key (None for local endpoints without auth)
+    api_key: Option<String>,
+    /// Base URL for the API
     base_url: String,
+    /// Custom headers to include in requests
+    custom_headers: HashMap<String, String>,
+    /// Request timeout
     timeout: Duration,
+    /// Maximum retries on failure
     max_retries: u32,
+    /// Rate limiter
     rate_limiter: Arc<RateLimiter>,
     // Cost tracking
     total_input_tokens: AtomicU64,
@@ -135,16 +179,27 @@ pub struct OpenRouterClient {
     total_cost_micros: AtomicU64, // Store as microdollars for atomic ops
 }
 
-impl OpenRouterClient {
-    /// Create a new OpenRouter client.
+impl LLMClient {
+    /// Create a new LLM client.
+    ///
+    /// # Arguments
+    /// - `name`: Endpoint name for logging (e.g., "openrouter", "local")
+    /// - `api_key`: Optional API key (None for local endpoints)
+    /// - `base_url`: Base URL for the API
+    /// - `custom_headers`: Additional headers to include in requests
+    /// - `timeout_secs`: Request timeout in seconds
+    /// - `max_retries`: Maximum retry attempts
+    /// - `rate_limiter`: Optional shared rate limiter
     pub fn new(
-        api_key: String,
-        base_url: Option<String>,
-        timeout_secs: Option<u64>,
-        max_retries: Option<u32>,
+        name: String,
+        api_key: Option<String>,
+        base_url: String,
+        custom_headers: HashMap<String, String>,
+        timeout_secs: u64,
+        max_retries: u32,
         rate_limiter: Option<Arc<RateLimiter>>,
     ) -> Result<Self> {
-        let timeout = Duration::from_secs(timeout_secs.unwrap_or(180));
+        let timeout = Duration::from_secs(timeout_secs);
 
         let client = reqwest::Client::builder()
             .timeout(timeout)
@@ -153,15 +208,48 @@ impl OpenRouterClient {
 
         Ok(Self {
             client,
+            name,
             api_key,
-            base_url: base_url.unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string()),
+            base_url,
+            custom_headers,
             timeout,
-            max_retries: max_retries.unwrap_or(3),
+            max_retries,
             rate_limiter: rate_limiter.unwrap_or_else(|| Arc::new(RateLimiter::new())),
             total_input_tokens: AtomicU64::new(0),
             total_output_tokens: AtomicU64::new(0),
             total_cost_micros: AtomicU64::new(0),
         })
+    }
+
+    /// Create an OpenRouter client (convenience constructor for backward compatibility).
+    ///
+    /// K_i: This maintains the original OpenRouterClient::new() signature.
+    pub fn openrouter(
+        api_key: String,
+        base_url: Option<String>,
+        timeout_secs: Option<u64>,
+        max_retries: Option<u32>,
+        rate_limiter: Option<Arc<RateLimiter>>,
+    ) -> Result<Self> {
+        Self::new(
+            "openrouter".to_string(),
+            Some(api_key),
+            base_url.unwrap_or_else(|| "https://openrouter.ai/api/v1".to_string()),
+            HashMap::new(),
+            timeout_secs.unwrap_or(180),
+            max_retries.unwrap_or(3),
+            rate_limiter,
+        )
+    }
+
+    /// Get the endpoint name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Get the base URL.
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 
     /// Get the rate limiter.
@@ -172,16 +260,34 @@ impl OpenRouterClient {
     /// Build headers for a request.
     fn headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {}", self.api_key)).unwrap(),
-        );
+
+        // Add Authorization header if API key is present
+        if let Some(ref api_key) = self.api_key {
+            headers.insert(
+                AUTHORIZATION,
+                HeaderValue::from_str(&format!("Bearer {api_key}")).unwrap(),
+            );
+        }
+
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+
+        // Add OpenRouter-specific headers (harmless for other providers)
         headers.insert(
             "HTTP-Referer",
             HeaderValue::from_static("https://github.com/infernet-org/episteme"),
         );
         headers.insert("X-Title", HeaderValue::from_static("episteme"));
+
+        // Add custom headers
+        for (key, value) in &self.custom_headers {
+            if let (Ok(name), Ok(val)) = (
+                HeaderName::try_from(key.as_str()),
+                HeaderValue::from_str(value),
+            ) {
+                headers.insert(name, val);
+            }
+        }
+
         headers
     }
 
@@ -242,6 +348,7 @@ impl OpenRouterClient {
                     if attempt < self.max_retries - 1 {
                         let backoff = Duration::from_secs(2u64.pow(attempt));
                         debug!(
+                            endpoint = %self.name,
                             attempt = attempt,
                             backoff_secs = backoff.as_secs(),
                             "Retrying after network error"
@@ -273,6 +380,7 @@ impl OpenRouterClient {
 
                 if attempt < self.max_retries - 1 {
                     debug!(
+                        endpoint = %self.name,
                         attempt = attempt,
                         retry_after_secs = retry_after,
                         "Rate limited, waiting"
@@ -398,5 +506,88 @@ impl OpenRouterClient {
         self.total_input_tokens.store(0, Ordering::Relaxed);
         self.total_output_tokens.store(0, Ordering::Relaxed);
         self.total_cost_micros.store(0, Ordering::Relaxed);
+    }
+
+    /// Health check: ping the /models endpoint.
+    ///
+    /// K_i: endpoint is reachable and responding
+    /// B_i: endpoint is healthy if /models returns 200
+    pub async fn health_check(&self) -> HealthCheckResult {
+        let start = Instant::now();
+        let url = format!("{}/models", self.base_url);
+
+        match self
+            .client
+            .get(&url)
+            .headers(self.headers())
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+        {
+            Ok(response) => {
+                let latency_ms = start.elapsed().as_millis() as u64;
+                if response.status().is_success() {
+                    HealthCheckResult {
+                        endpoint: self.name.clone(),
+                        status: HealthStatus::Healthy,
+                        latency_ms: Some(latency_ms),
+                        error: None,
+                    }
+                } else {
+                    HealthCheckResult {
+                        endpoint: self.name.clone(),
+                        status: HealthStatus::Unhealthy,
+                        latency_ms: Some(latency_ms),
+                        error: Some(format!("HTTP {}", response.status().as_u16())),
+                    }
+                }
+            }
+            Err(e) => HealthCheckResult {
+                endpoint: self.name.clone(),
+                status: HealthStatus::Unreachable,
+                latency_ms: None,
+                error: Some(e.to_string()),
+            },
+        }
+    }
+}
+
+/// Type alias for backward compatibility.
+///
+/// K_i: OpenRouterClient is now just an alias for LLMClient.
+/// Existing code continues to work unchanged.
+pub type OpenRouterClient = LLMClient;
+
+/// Health check result.
+#[derive(Debug, Clone)]
+pub struct HealthCheckResult {
+    /// Endpoint name
+    pub endpoint: String,
+    /// Health status
+    pub status: HealthStatus,
+    /// Latency in milliseconds (if reachable)
+    pub latency_ms: Option<u64>,
+    /// Error message (if unhealthy or unreachable)
+    pub error: Option<String>,
+}
+
+/// Health status of an endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthStatus {
+    /// Endpoint is responding normally
+    Healthy,
+    /// Endpoint is responding but with errors
+    Unhealthy,
+    /// Endpoint is not reachable
+    Unreachable,
+}
+
+impl std::fmt::Display for HealthStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HealthStatus::Healthy => write!(f, "healthy"),
+            HealthStatus::Unhealthy => write!(f, "unhealthy"),
+            HealthStatus::Unreachable => write!(f, "unreachable"),
+        }
     }
 }
