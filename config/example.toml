@@ -48,6 +48,10 @@ max_retries = 3
 # [endpoints.groq]
 # base_url = "https://api.groq.com/openai/v1"
 # api_key_env = "GROQ_API_KEY"
+#
+# llama.cpp server (local CPU/GPU inference):
+# [endpoints.llamacpp]
+# base_url = "http://localhost:8080/v1"
 
 # ============================================================================
 # Worker pool (generation)

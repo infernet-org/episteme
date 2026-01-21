@@ -15,7 +15,29 @@ use tracing::{info, warn};
 /// Registry of configured LLM endpoints.
 ///
 /// Provides access to LLMClient instances by endpoint name.
-/// "openrouter" is always the default endpoint.
+/// "openrouter" is always the default endpoint and is automatically created.
+///
+/// Thread-safe: All clients are wrapped in `Arc<LLMClient>` for shared access.
+///
+/// # Example
+///
+/// ```ignore
+/// use episteme::{Config, EndpointRegistry};
+///
+/// let config = Config::from_file("config.toml")?;
+/// let registry = EndpointRegistry::from_config(&config)?;
+///
+/// // Get the default OpenRouter client
+/// let client = registry.openrouter();
+///
+/// // Or get a specific endpoint
+/// if let Some(local) = registry.get("ollama") {
+///     // Use local client
+/// }
+///
+/// // Run health checks on all endpoints
+/// let results = registry.health_check_all().await;
+/// ```
 pub struct EndpointRegistry {
     endpoints: HashMap<String, Arc<LLMClient>>,
 }
@@ -24,6 +46,13 @@ impl EndpointRegistry {
     /// Build registry from configuration.
     ///
     /// Creates LLMClient instances for OpenRouter and all configured endpoints.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ConfigError::MissingApiKey` if an endpoint requires an API key
+    /// but none is configured or found in environment variables.
+    ///
+    /// Returns `ConfigError::EndpointNotFound` if client creation fails.
     pub fn from_config(config: &Config) -> Result<Self, ConfigError> {
         let mut endpoints = HashMap::new();
 

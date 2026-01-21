@@ -99,6 +99,9 @@ struct ApiErrorDetail {
 }
 
 /// Response from a completion request.
+///
+/// Contains the generated content along with usage metrics and cost tracking.
+/// All fields are populated from the API response.
 #[derive(Debug, Clone)]
 pub struct CompletionResponse {
     /// Generated content
@@ -130,6 +133,30 @@ pub struct CompletionResponse {
 /// - Cost tracking
 /// - Retry with exponential backoff
 /// - Custom headers for auth flexibility
+///
+/// # Example
+///
+/// ```ignore
+/// use episteme::LLMClient;
+/// use std::collections::HashMap;
+///
+/// // Create an OpenRouter client
+/// let client = LLMClient::openrouter(
+///     "sk-or-...".to_string(),
+///     None, None, None, None,
+/// )?;
+///
+/// // Or create a custom endpoint client (e.g., local Ollama)
+/// let local_client = LLMClient::new(
+///     "ollama".to_string(),
+///     None,  // No API key for local
+///     "http://localhost:11434/v1".to_string(),
+///     HashMap::new(),
+///     180,  // timeout_secs
+///     3,    // max_retries
+///     None,
+/// )?;
+/// ```
 pub struct LLMClient {
     client: reqwest::Client,
     /// Name of this endpoint (for logging)
