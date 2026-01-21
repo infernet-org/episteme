@@ -78,6 +78,84 @@ pub struct PoolConfig {
 
     /// Models to use in this pool
     pub models: Vec<ModelSpec>,
+
+    /// Ensemble configuration (for judges only)
+    #[serde(default)]
+    pub ensemble: EnsembleConfig,
+}
+
+/// Ensemble judging configuration.
+///
+/// Epistemic foundation:
+/// - B_i(single judge) → B_i(HIGH) via consensus from multiple judges
+/// - I_i(judge bias) → K_i(disagreement) via explicit measurement
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnsembleConfig {
+    /// Enable ensemble judging (multiple judges per sample)
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Number of judges per sample (default: 3)
+    #[serde(default = "default_num_judges")]
+    pub num_judges: usize,
+
+    /// Aggregation strategy for combining scores
+    #[serde(default)]
+    pub strategy: AggregationStrategy,
+
+    /// Standard deviation threshold for "low confidence" flag
+    /// Samples with score_std_dev >= this are marked as "no consensus"
+    #[serde(default = "default_disagreement_threshold")]
+    pub disagreement_threshold: f64,
+
+    /// Enable hierarchical mode: cheap judge first, ensemble only if uncertain
+    #[serde(default)]
+    pub hierarchical: bool,
+
+    /// Score range considered "uncertain" in hierarchical mode
+    /// Scores in [low, high] trigger full ensemble evaluation
+    #[serde(default = "default_uncertain_range")]
+    pub uncertain_range: (f64, f64),
+}
+
+impl Default for EnsembleConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            num_judges: default_num_judges(),
+            strategy: AggregationStrategy::default(),
+            disagreement_threshold: default_disagreement_threshold(),
+            hierarchical: false,
+            uncertain_range: default_uncertain_range(),
+        }
+    }
+}
+
+fn default_num_judges() -> usize {
+    3
+}
+
+fn default_disagreement_threshold() -> f64 {
+    0.15
+}
+
+fn default_uncertain_range() -> (f64, f64) {
+    (0.4, 0.7)
+}
+
+/// Strategy for aggregating multiple judge scores.
+///
+/// K_i: Median is most robust to outliers (one bad judge doesn't skew result).
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum AggregationStrategy {
+    /// Median score (default, robust to outliers)
+    #[default]
+    Median,
+    /// Average of all scores
+    Average,
+    /// Weighted average using model weights
+    WeightedAverage,
 }
 
 /// Specification for a model.

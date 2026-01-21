@@ -18,7 +18,19 @@ models = [
 size = 5
 models = [
     { id = "openai/gpt-4o", label = "GPT-4o", weight = 1, input_price_per_1m = 2.5, output_price_per_1m = 10.0, max_tokens = 2048, temperature = 0.3 },
+    { id = "anthropic/claude-sonnet-4", label = "Sonnet", weight = 1, input_price_per_1m = 3.0, output_price_per_1m = 15.0, max_tokens = 2048, temperature = 0.3 },
+    { id = "google/gemini-2.0-flash-001", label = "Gemini-Flash", weight = 1, input_price_per_1m = 0.1, output_price_per_1m = 0.4, max_tokens = 2048, temperature = 0.3 },
 ]
+
+# Ensemble judging: multiple judges for higher confidence
+# B_i(single judge) -> B_i(HIGH) via consensus
+[judges.ensemble]
+enabled = true
+num_judges = 3              # Use 3 judges per sample
+strategy = "median"         # median | average | weightedaverage
+disagreement_threshold = 0.15  # std_dev >= this marks "low confidence"
+hierarchical = false        # If true: cheap judge first, ensemble only if uncertain
+uncertain_range = [0.4, 0.7]   # Score range that triggers full ensemble in hierarchical mode
 
 [generation]
 system_prompt = "prompts/system.md"

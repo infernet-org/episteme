@@ -9,7 +9,7 @@
 use crate::checkpoint::CheckpointManager;
 use crate::client::OpenRouterClient;
 use crate::models::{
-    Config, DpoPair, EpistemeError, JudgeResult, Problem, Result, RunStats, Sample, Verdict,
+    Config, DpoPair, EnsembleJudgeResult, EpistemeError, Problem, Result, RunStats, Sample, Verdict,
 };
 use crate::pool::{JudgePool, WorkerPool};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -53,6 +53,7 @@ impl DpoPipeline {
             judge_prompt,
             config.judges.size,
             config.generation.approval_threshold,
+            config.judges.ensemble.clone(),
         );
 
         let responses_per_problem = config.generation.responses_per_problem.max(2);
@@ -89,7 +90,10 @@ impl DpoPipeline {
     /// Create a DPO pair from judged samples.
     ///
     /// K_i: Chosen has higher score than rejected.
-    fn create_pair(problem: &Problem, judged_samples: &[(Sample, JudgeResult)]) -> Option<DpoPair> {
+    fn create_pair(
+        problem: &Problem,
+        judged_samples: &[(Sample, EnsembleJudgeResult)],
+    ) -> Option<DpoPair> {
         if judged_samples.len() < 2 {
             return None;
         }

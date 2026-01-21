@@ -47,6 +47,7 @@ impl SftPipeline {
             judge_prompt,
             config.judges.size,
             config.generation.approval_threshold,
+            config.judges.ensemble.clone(),
         );
 
         Ok(Self {
