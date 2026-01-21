@@ -5,15 +5,20 @@
 //!
 //! K_i: DPO requires preference pairs (chosen, rejected) from the same input.
 //! Strategy: Generate N responses per problem, judge all, pair highest vs lowest score.
+//!
+//! Atomicity guarantees:
+//! - Each problem is processed as a transaction
+//! - Checkpoint and output are updated atomically
+//! - Failed items are properly tracked for retry
 
-use crate::checkpoint::CheckpointManager;
-use crate::client::OpenRouterClient;
+use crate::checkpoint::{CheckpointManager, RetryReason, Transaction};
+use crate::client::EndpointRegistry;
 use crate::models::{
     Config, DpoPair, EnsembleJudgeResult, EpistemeError, Problem, Result, RunStats, Sample, Verdict,
 };
 use crate::pool::{JudgePool, WorkerPool};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -26,13 +31,13 @@ pub struct DpoPipeline {
     worker_pool: WorkerPool,
     judge_pool: JudgePool,
     config: Config,
-    client: Arc<OpenRouterClient>,
+    registry: Arc<EndpointRegistry>,
     responses_per_problem: usize,
 }
 
 impl DpoPipeline {
     /// Create a new DPO pipeline from configuration.
-    pub fn new(config: Config, client: Arc<OpenRouterClient>) -> Result<Self> {
+    pub fn new(config: Config, registry: Arc<EndpointRegistry>) -> Result<Self> {
         // Load prompts
         let system_prompt = std::fs::read_to_string(&config.generation.system_prompt)
             .map_err(|e| EpistemeError::io("reading system prompt", e))?;
@@ -41,14 +46,14 @@ impl DpoPipeline {
             .map_err(|e| EpistemeError::io("reading judge prompt", e))?;
 
         let worker_pool = WorkerPool::new(
-            Arc::clone(&client),
+            Arc::clone(&registry),
             config.workers.models.clone(),
             system_prompt,
             config.workers.size,
         );
 
         let judge_pool = JudgePool::new(
-            Arc::clone(&client),
+            Arc::clone(&registry),
             config.judges.models.clone(),
             judge_prompt,
             config.judges.size,
@@ -62,7 +67,7 @@ impl DpoPipeline {
             worker_pool,
             judge_pool,
             config,
-            client,
+            registry,
             responses_per_problem,
         })
     }
@@ -175,8 +180,18 @@ impl DpoPipeline {
                 })
                 .collect();
 
-            let (samples, _failed_gen) = self.worker_pool.generate_batch(generation_tasks).await;
+            let (samples, failed_gen) = self.worker_pool.generate_batch(generation_tasks).await;
             stats.total_generated += samples.len();
+
+            // Log generation failures explicitly
+            if !failed_gen.is_empty() {
+                warn!(
+                    problem_id = %problem.id,
+                    failed = failed_gen.len(),
+                    generated = samples.len(),
+                    "Some generations failed for problem"
+                );
+            }
 
             if samples.len() < 2 {
                 warn!(
@@ -190,8 +205,18 @@ impl DpoPipeline {
             }
 
             // Judge all samples
-            let (judged, _failed_judge) = self.judge_pool.evaluate_batch(samples).await;
+            let (judged, failed_judge) = self.judge_pool.evaluate_batch(samples).await;
             stats.total_judged += judged.len();
+
+            // Log judgment failures explicitly
+            if !failed_judge.is_empty() {
+                warn!(
+                    problem_id = %problem.id,
+                    failed = failed_judge.len(),
+                    judged = judged.len(),
+                    "Some judgments failed for problem"
+                );
+            }
 
             // Track costs
             for (sample, judge_result) in &judged {
@@ -214,12 +239,10 @@ impl DpoPipeline {
                 stats.total_rejected += 1;
             }
 
-            // Flush periodically
-            if (idx + 1) % 10 == 0 {
-                writer
-                    .flush()
-                    .map_err(|e| EpistemeError::io("flushing output", e))?;
-            }
+            // Flush after every problem for durability (reduced from every 10)
+            writer
+                .flush()
+                .map_err(|e| EpistemeError::io("flushing output", e))?;
 
             // Update progress
             pb.set_position((idx + 1) as u64);
@@ -251,6 +274,11 @@ impl DpoPipeline {
     }
 
     /// Run the DPO pipeline with optional checkpoint support.
+    ///
+    /// Uses transaction-based atomicity to ensure:
+    /// - No data loss on crash
+    /// - Checkpoint and output are always in sync
+    /// - Failed items are properly tracked for retry
     pub async fn run_with_checkpoint(
         &self,
         problems: Vec<Problem>,
@@ -265,6 +293,15 @@ impl DpoPipeline {
 
         let start = Instant::now();
         let total = problems.len();
+
+        // Check for and recover any pending transactions from previous crash
+        if let Some(recovered_ops) = Transaction::recover(checkpoint.dir())? {
+            warn!(
+                ops = recovered_ops.len(),
+                "Recovered pending transaction operations"
+            );
+            checkpoint.apply_transaction_ops(&recovered_ops)?;
+        }
 
         // Filter to only pending problems
         let pending_problems = checkpoint.filter_pending(problems);
@@ -302,19 +339,14 @@ impl DpoPipeline {
         let already_done = total - pending_count;
         pb.set_position(already_done as u64);
 
-        // Open output file in append mode for resume
-        let output_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(output_path)
-            .map_err(|e| EpistemeError::io("opening output file", e))?;
-        let mut writer = BufWriter::new(output_file);
-
         let mut pairs_created = 0;
         let mut pairs_skipped = 0;
 
-        // Process each pending problem
+        // Process each pending problem with per-problem transactions
         for (idx, problem) in pending_problems.into_iter().enumerate() {
+            // Begin transaction for this problem
+            let mut tx = Transaction::begin(checkpoint.dir(), output_path)?;
+
             // Generate N responses for this problem
             let generation_tasks: Vec<Problem> = (0..self.responses_per_problem)
                 .map(|i| Problem {
@@ -324,7 +356,17 @@ impl DpoPipeline {
                 })
                 .collect();
 
-            let (samples, _failed_gen) = self.worker_pool.generate_batch(generation_tasks).await;
+            let (samples, failed_gen) = self.worker_pool.generate_batch(generation_tasks).await;
+
+            // Handle generation failures explicitly
+            if !failed_gen.is_empty() {
+                warn!(
+                    problem_id = %problem.id,
+                    failed = failed_gen.len(),
+                    generated = samples.len(),
+                    "Some generations failed for problem"
+                );
+            }
 
             if samples.len() < 2 {
                 warn!(
@@ -333,7 +375,9 @@ impl DpoPipeline {
                     "Not enough samples generated for DPO pair"
                 );
                 pairs_skipped += 1;
-                checkpoint.mark_failed(&problem.id)?;
+                tx.record_failed(&problem.id, RetryReason::InsufficientSamples)?;
+                let committed_ops = tx.commit()?;
+                checkpoint.apply_transaction_ops(&committed_ops)?;
                 pb.set_position((already_done + idx + 1) as u64);
                 continue;
             }
@@ -341,15 +385,38 @@ impl DpoPipeline {
             // Calculate generation cost
             let gen_cost: f64 = samples.iter().map(|s| s.cost_usd).sum();
 
-            // Mark as generated (use first model for tracking)
+            // Record generation (for tracking, not for output)
             let model = samples
                 .first()
                 .map(|s| s.model.as_str())
                 .unwrap_or("unknown");
-            checkpoint.mark_generated(&problem.id, model, gen_cost)?;
+            tx.record_generated(&problem.id, model, gen_cost)?;
 
             // Judge all samples
-            let (judged, _failed_judge) = self.judge_pool.evaluate_batch(samples).await;
+            let (judged, failed_judge) = self.judge_pool.evaluate_batch(samples).await;
+
+            // Handle judgment failures
+            if !failed_judge.is_empty() {
+                warn!(
+                    problem_id = %problem.id,
+                    failed = failed_judge.len(),
+                    "Some judgments failed for problem"
+                );
+            }
+
+            if judged.len() < 2 {
+                warn!(
+                    problem_id = %problem.id,
+                    judged = judged.len(),
+                    "Not enough judged samples for DPO pair"
+                );
+                pairs_skipped += 1;
+                tx.record_failed(&problem.id, RetryReason::JudgmentFailed)?;
+                let committed_ops = tx.commit()?;
+                checkpoint.apply_transaction_ops(&committed_ops)?;
+                pb.set_position((already_done + idx + 1) as u64);
+                continue;
+            }
 
             // Calculate judge cost
             let judge_cost: f64 = judged.iter().map(|(_, jr)| jr.judge_cost_usd).sum();
@@ -362,8 +429,6 @@ impl DpoPipeline {
                     EpistemeError::Internal(format!("Failed to serialize pair: {e}"))
                 })?;
 
-                writeln!(writer, "{json}").map_err(|e| EpistemeError::io("writing output", e))?;
-
                 // Get the score from the chosen response
                 let chosen_score = judged
                     .iter()
@@ -371,28 +436,28 @@ impl DpoPipeline {
                     .map(|(_, jr)| jr.score)
                     .unwrap_or(0.0);
 
-                checkpoint.mark_judged(&problem.id, chosen_score, Verdict::Approve, judge_cost)?;
+                tx.record_judged(
+                    &problem.id,
+                    chosen_score,
+                    Verdict::Approve,
+                    judge_cost,
+                    json,
+                )?;
             } else {
                 pairs_skipped += 1;
-                checkpoint.mark_judged(&problem.id, 0.0, Verdict::Reject, judge_cost)?;
+                // Record as rejected (score difference too small)
+                tx.record_judged(&problem.id, 0.0, Verdict::Reject, judge_cost, String::new())?;
             }
 
-            // Flush periodically
-            if (idx + 1) % 10 == 0 {
-                writer
-                    .flush()
-                    .map_err(|e| EpistemeError::io("flushing output", e))?;
-            }
+            // Commit transaction (atomic)
+            let committed_ops = tx.commit()?;
+            checkpoint.apply_transaction_ops(&committed_ops)?;
 
             // Update progress
             pb.set_position((already_done + idx + 1) as u64);
             pb.set_message(format!("pairs: {pairs_created}, skipped: {pairs_skipped}"));
         }
 
-        // Finalize
-        writer
-            .flush()
-            .map_err(|e| EpistemeError::io("flushing output", e))?;
         pb.finish_with_message(format!(
             "Done! {pairs_created} pairs created, {pairs_skipped} skipped"
         ));

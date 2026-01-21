@@ -2,13 +2,18 @@
 //!
 //! Pipeline flow:
 //! Problems → Worker Pool → Samples → Judge Pool → Approved Samples → JSONL
+//!
+//! Atomicity guarantees:
+//! - Each batch is processed as a transaction
+//! - Checkpoint and output are updated atomically
+//! - Crash recovery via pending transaction files
 
-use crate::checkpoint::CheckpointManager;
-use crate::client::OpenRouterClient;
+use crate::checkpoint::{CheckpointManager, RetryReason, Transaction};
+use crate::client::EndpointRegistry;
 use crate::models::{Config, EpistemeError, Problem, Result, RunStats, SftSample, Verdict};
 use crate::pool::{JudgePool, WorkerPool};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::Path;
 use std::sync::Arc;
@@ -21,12 +26,12 @@ pub struct SftPipeline {
     worker_pool: WorkerPool,
     judge_pool: JudgePool,
     config: Config,
-    client: Arc<OpenRouterClient>,
+    registry: Arc<EndpointRegistry>,
 }
 
 impl SftPipeline {
     /// Create a new SFT pipeline from configuration.
-    pub fn new(config: Config, client: Arc<OpenRouterClient>) -> Result<Self> {
+    pub fn new(config: Config, registry: Arc<EndpointRegistry>) -> Result<Self> {
         // Load prompts
         let system_prompt = std::fs::read_to_string(&config.generation.system_prompt)
             .map_err(|e| EpistemeError::io("reading system prompt", e))?;
@@ -35,14 +40,14 @@ impl SftPipeline {
             .map_err(|e| EpistemeError::io("reading judge prompt", e))?;
 
         let worker_pool = WorkerPool::new(
-            Arc::clone(&client),
+            Arc::clone(&registry),
             config.workers.models.clone(),
             system_prompt,
             config.workers.size,
         );
 
         let judge_pool = JudgePool::new(
-            Arc::clone(&client),
+            Arc::clone(&registry),
             config.judges.models.clone(),
             judge_prompt,
             config.judges.size,
@@ -54,7 +59,7 @@ impl SftPipeline {
             worker_pool,
             judge_pool,
             config,
-            client,
+            registry,
         })
     }
 
@@ -216,6 +221,11 @@ impl SftPipeline {
     }
 
     /// Run the SFT pipeline with optional checkpoint support.
+    ///
+    /// Uses transaction-based atomicity to ensure:
+    /// - No data loss on crash
+    /// - Checkpoint and output are always in sync
+    /// - Failed items are properly tracked for retry
     pub async fn run_with_checkpoint(
         &self,
         problems: Vec<Problem>,
@@ -230,6 +240,15 @@ impl SftPipeline {
 
         let start = Instant::now();
         let total = problems.len();
+
+        // Check for and recover any pending transactions from previous crash
+        if let Some(recovered_ops) = Transaction::recover(checkpoint.dir())? {
+            warn!(
+                ops = recovered_ops.len(),
+                "Recovered pending transaction operations"
+            );
+            checkpoint.apply_transaction_ops(&recovered_ops)?;
+        }
 
         // Filter to only pending problems
         let pending_problems = checkpoint.filter_pending(problems);
@@ -263,15 +282,7 @@ impl SftPipeline {
         let already_done = total - pending_count;
         pb.set_position(already_done as u64);
 
-        // Open output file in append mode for resume
-        let output_file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(output_path)
-            .map_err(|e| EpistemeError::io("opening output file", e))?;
-        let mut writer = BufWriter::new(output_file);
-
-        // Process in batches
+        // Process in batches with transactions
         let batch_size = (self.config.workers.size * 2).max(10);
         let mut approved_count = 0;
         let mut rejected_count = 0;
@@ -280,12 +291,15 @@ impl SftPipeline {
             let batch_end = (batch_start + batch_size).min(pending_problems.len());
             let batch: Vec<Problem> = pending_problems[batch_start..batch_end].to_vec();
 
+            // Begin transaction for this batch
+            let mut tx = Transaction::begin(checkpoint.dir(), output_path)?;
+
             // Generate samples
             let (samples, failed_gen) = self.worker_pool.generate_batch(batch).await;
 
-            // Mark failed generations
+            // Record failed generations in transaction
             for problem_id in &failed_gen {
-                checkpoint.mark_failed(problem_id)?;
+                tx.record_failed(problem_id, RetryReason::GenerationFailed)?;
             }
 
             if !failed_gen.is_empty() {
@@ -295,11 +309,18 @@ impl SftPipeline {
             // Judge samples
             let (judged, failed_judge) = self.judge_pool.evaluate_batch(samples).await;
 
+            // Record judgment failures
+            for sample_id in &failed_judge {
+                // Extract problem ID from sample ID (remove any suffix like _0, _1, etc.)
+                let problem_id = sample_id.split('_').next().unwrap_or(sample_id);
+                tx.record_failed(problem_id, RetryReason::JudgmentFailed)?;
+            }
+
             if !failed_judge.is_empty() {
                 warn!(count = failed_judge.len(), "Some samples failed evaluation");
             }
 
-            // Write approved samples and update checkpoint
+            // Record judged samples in transaction
             for (sample, judge_result) in judged {
                 // Extract original problem ID (remove any suffix)
                 let problem_id = sample
@@ -309,63 +330,52 @@ impl SftPipeline {
                     .unwrap_or(&sample.problem_id)
                     .to_string();
 
-                match judge_result.verdict {
+                let should_write = match judge_result.verdict {
                     Verdict::Approve => {
                         approved_count += 1;
-
-                        let sft_sample = SftSample::from_judged(
-                            sample.clone(),
-                            judge_result.clone(),
-                            self.config.output.track_costs,
-                        );
-
-                        let json = serde_json::to_string(&sft_sample).map_err(|e| {
-                            EpistemeError::Internal(format!("Failed to serialize sample: {e}"))
-                        })?;
-
-                        writeln!(writer, "{json}")
-                            .map_err(|e| EpistemeError::io("writing output", e))?;
-
-                        checkpoint.mark_judged(
-                            &problem_id,
-                            judge_result.score,
-                            Verdict::Approve,
-                            judge_result.judge_cost_usd,
-                        )?;
+                        true
                     }
                     Verdict::Reject => {
                         rejected_count += 1;
-
-                        // Optionally write rejected samples
-                        if self.config.output.include_rejected {
-                            let sft_sample = SftSample::from_judged(
-                                sample.clone(),
-                                judge_result.clone(),
-                                self.config.output.track_costs,
-                            );
-
-                            let json = serde_json::to_string(&sft_sample).map_err(|e| {
-                                EpistemeError::Internal(format!("Failed to serialize sample: {e}"))
-                            })?;
-
-                            writeln!(writer, "{json}")
-                                .map_err(|e| EpistemeError::io("writing output", e))?;
-                        }
-
-                        checkpoint.mark_judged(
-                            &problem_id,
-                            judge_result.score,
-                            Verdict::Reject,
-                            judge_result.judge_cost_usd,
-                        )?;
+                        self.config.output.include_rejected
                     }
+                };
+
+                if should_write {
+                    let sft_sample = SftSample::from_judged(
+                        sample.clone(),
+                        judge_result.clone(),
+                        self.config.output.track_costs,
+                    );
+
+                    let json = serde_json::to_string(&sft_sample).map_err(|e| {
+                        EpistemeError::Internal(format!("Failed to serialize sample: {e}"))
+                    })?;
+
+                    tx.record_judged(
+                        &problem_id,
+                        judge_result.score,
+                        judge_result.verdict,
+                        judge_result.judge_cost_usd,
+                        json,
+                    )?;
+                } else {
+                    // Record judgment without output (rejected, not included)
+                    tx.record_judged(
+                        &problem_id,
+                        judge_result.score,
+                        judge_result.verdict,
+                        judge_result.judge_cost_usd,
+                        String::new(),
+                    )?;
                 }
             }
 
-            // Flush periodically
-            writer
-                .flush()
-                .map_err(|e| EpistemeError::io("flushing output", e))?;
+            // Commit transaction (atomic: all operations succeed or none)
+            let committed_ops = tx.commit()?;
+
+            // Apply committed operations to checkpoint
+            checkpoint.apply_transaction_ops(&committed_ops)?;
 
             // Update progress
             pb.set_position((already_done + batch_end) as u64);
@@ -374,10 +384,6 @@ impl SftPipeline {
             ));
         }
 
-        // Finalize
-        writer
-            .flush()
-            .map_err(|e| EpistemeError::io("flushing output", e))?;
         pb.finish_with_message(format!(
             "Done! {approved_count} approved, {rejected_count} rejected"
         ));
