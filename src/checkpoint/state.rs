@@ -6,14 +6,15 @@
 //! - B_i: Checkpoint file may not exist → Option
 //! - I^B: Crash during write → backup file provides recovery
 
+use crate::checkpoint::RetryReason;
 use crate::models::{EpistemeError, Problem, Result, RunStats, Verdict};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufReader, BufWriter};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 /// Status of a problem in the pipeline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -27,8 +28,10 @@ pub enum ProblemStatus {
     Approved,
     /// Fully processed and rejected
     Rejected,
-    /// Failed during processing
+    /// Failed during processing, awaiting retry
     Failed,
+    /// Marked for retry after transient failure
+    RetryPending,
 }
 
 /// Checkpoint entry for a single problem.
@@ -50,6 +53,12 @@ pub struct ProblemCheckpoint {
     /// Judge cost
     #[serde(default)]
     pub judge_cost: f64,
+    /// Number of retry attempts
+    #[serde(default)]
+    pub retry_count: u32,
+    /// Reason for last failure (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_reason: Option<RetryReason>,
     /// Timestamp of last update
     pub updated_at: DateTime<Utc>,
 }
@@ -79,6 +88,7 @@ pub struct CheckpointStats {
     pub approved: usize,
     pub rejected: usize,
     pub failed: usize,
+    pub retry_pending: usize,
     pub generation_cost: f64,
     pub judge_cost: f64,
 }
@@ -109,6 +119,8 @@ impl CheckpointState {
                     model: None,
                     gen_cost: 0.0,
                     judge_cost: 0.0,
+                    retry_count: 0,
+                    retry_reason: None,
                     updated_at: now,
                 },
             );
@@ -117,11 +129,22 @@ impl CheckpointState {
         state
     }
 
-    /// Get pending problem IDs.
+    /// Get pending problem IDs (includes retry pending).
     pub fn pending_ids(&self) -> Vec<String> {
         self.problems
             .iter()
-            .filter(|(_, cp)| cp.status == ProblemStatus::Pending)
+            .filter(|(_, cp)| {
+                cp.status == ProblemStatus::Pending || cp.status == ProblemStatus::RetryPending
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
+    /// Get only retry pending problem IDs.
+    pub fn retry_pending_ids(&self) -> Vec<String> {
+        self.problems
+            .iter()
+            .filter(|(_, cp)| cp.status == ProblemStatus::RetryPending)
             .map(|(id, _)| id.clone())
             .collect()
     }
@@ -172,6 +195,7 @@ impl CheckpointState {
             match cp.status {
                 ProblemStatus::Pending => self.stats.pending -= 1,
                 ProblemStatus::Generated => self.stats.generated -= 1,
+                ProblemStatus::RetryPending => self.stats.retry_pending -= 1,
                 _ => {}
             }
             cp.status = ProblemStatus::Failed;
@@ -181,9 +205,59 @@ impl CheckpointState {
         self.updated_at = Utc::now();
     }
 
+    /// Mark a problem for retry after a transient failure.
+    ///
+    /// This differs from mark_failed in that:
+    /// - The problem will be included in pending_ids() on next run
+    /// - Retry count is tracked for backoff/limit policies
+    /// - Retry reason is recorded for debugging
+    pub fn mark_for_retry(&mut self, problem_id: &str, reason: RetryReason) {
+        if let Some(cp) = self.problems.get_mut(problem_id) {
+            // Decrement previous status count
+            match cp.status {
+                ProblemStatus::Pending => self.stats.pending -= 1,
+                ProblemStatus::Generated => self.stats.generated -= 1,
+                ProblemStatus::Failed => self.stats.failed -= 1,
+                _ => {}
+            }
+            cp.status = ProblemStatus::RetryPending;
+            cp.retry_count += 1;
+            cp.retry_reason = Some(reason);
+            cp.updated_at = Utc::now();
+            self.stats.retry_pending += 1;
+
+            warn!(
+                problem_id = %problem_id,
+                retry_count = cp.retry_count,
+                reason = ?reason,
+                "Problem marked for retry"
+            );
+        }
+        self.updated_at = Utc::now();
+    }
+
+    /// Mark a problem as permanently failed (no more retries).
+    ///
+    /// Use when retry limit is exceeded or failure is non-recoverable.
+    pub fn mark_permanently_failed(&mut self, problem_id: &str, reason: RetryReason) {
+        if let Some(cp) = self.problems.get_mut(problem_id) {
+            match cp.status {
+                ProblemStatus::Pending => self.stats.pending -= 1,
+                ProblemStatus::Generated => self.stats.generated -= 1,
+                ProblemStatus::RetryPending => self.stats.retry_pending -= 1,
+                _ => {}
+            }
+            cp.status = ProblemStatus::Failed;
+            cp.retry_reason = Some(reason);
+            cp.updated_at = Utc::now();
+            self.stats.failed += 1;
+        }
+        self.updated_at = Utc::now();
+    }
+
     /// Check if all problems are processed.
     pub fn is_complete(&self) -> bool {
-        self.stats.pending == 0 && self.stats.generated == 0
+        self.stats.pending == 0 && self.stats.generated == 0 && self.stats.retry_pending == 0
     }
 
     /// Get progress percentage.
@@ -341,6 +415,118 @@ impl CheckpointManager {
     pub fn mark_failed(&mut self, problem_id: &str) -> Result<()> {
         if let Some(state) = &mut self.state {
             state.mark_failed(problem_id);
+        }
+        self.save()
+    }
+
+    /// Mark for retry and save.
+    pub fn mark_for_retry(&mut self, problem_id: &str, reason: RetryReason) -> Result<()> {
+        if let Some(state) = &mut self.state {
+            state.mark_for_retry(problem_id, reason);
+        }
+        self.save()
+    }
+
+    /// Mark as permanently failed and save.
+    pub fn mark_permanently_failed(&mut self, problem_id: &str, reason: RetryReason) -> Result<()> {
+        if let Some(state) = &mut self.state {
+            state.mark_permanently_failed(problem_id, reason);
+        }
+        self.save()
+    }
+
+    /// Mark judged with atomic output write.
+    ///
+    /// This method atomically:
+    /// 1. Writes the output JSON to a temp file
+    /// 2. Updates the checkpoint
+    /// 3. Appends the output to the main output file
+    ///
+    /// This prevents split-brain where checkpoint says "judged" but output is missing.
+    pub fn mark_judged_with_output(
+        &mut self,
+        problem_id: &str,
+        score: f64,
+        verdict: Verdict,
+        judge_cost: f64,
+        output_json: &str,
+        output_path: &Path,
+    ) -> Result<()> {
+        // Write output to temp file first
+        let temp_path = self.dir.join("output.tmp");
+        {
+            let mut file = File::create(&temp_path)
+                .map_err(|e| EpistemeError::io("creating temp output", e))?;
+            writeln!(file, "{output_json}")
+                .map_err(|e| EpistemeError::io("writing temp output", e))?;
+            file.sync_all()
+                .map_err(|e| EpistemeError::io("syncing temp output", e))?;
+        }
+
+        // Update checkpoint state
+        if let Some(state) = &mut self.state {
+            state.mark_judged(problem_id, score, verdict, judge_cost);
+        }
+        self.save()?;
+
+        // Append temp output to main output file
+        let temp_content = fs::read_to_string(&temp_path)
+            .map_err(|e| EpistemeError::io("reading temp output", e))?;
+
+        let mut output_file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(output_path)
+            .map_err(|e| EpistemeError::io("opening output file", e))?;
+
+        output_file
+            .write_all(temp_content.as_bytes())
+            .map_err(|e| EpistemeError::io("appending to output", e))?;
+        output_file
+            .sync_all()
+            .map_err(|e| EpistemeError::io("syncing output", e))?;
+
+        // Clean up temp file
+        fs::remove_file(&temp_path).map_err(|e| EpistemeError::io("removing temp output", e))?;
+
+        Ok(())
+    }
+
+    /// Apply pending operations from a recovered transaction.
+    pub fn apply_transaction_ops(
+        &mut self,
+        ops: &[crate::checkpoint::PendingOperation],
+    ) -> Result<()> {
+        use crate::checkpoint::PendingOperation;
+
+        for op in ops {
+            match op {
+                PendingOperation::Generated {
+                    problem_id,
+                    model,
+                    cost,
+                } => {
+                    if let Some(state) = &mut self.state {
+                        state.mark_generated(problem_id, model, *cost);
+                    }
+                }
+                PendingOperation::Judged {
+                    problem_id,
+                    score,
+                    verdict,
+                    judge_cost,
+                    ..
+                } => {
+                    if let Some(state) = &mut self.state {
+                        state.mark_judged(problem_id, *score, *verdict, *judge_cost);
+                    }
+                }
+                PendingOperation::Failed { problem_id, reason } => {
+                    if let Some(state) = &mut self.state {
+                        state.mark_for_retry(problem_id, *reason);
+                    }
+                }
+            }
         }
         self.save()
     }

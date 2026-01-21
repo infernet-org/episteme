@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use episteme::{CheckpointManager, Config, DpoPipeline, EndpointRegistry, SftPipeline};
 use std::path::PathBuf;
+use std::sync::Arc;
 use tracing::{Level, info, warn};
 use tracing_subscriber::FmtSubscriber;
 
@@ -253,10 +254,10 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // Get OpenRouter client (for now, all models use openrouter by default)
-            let client = registry.openrouter().clone();
+            // Pass registry to pipeline (supports multiple endpoints)
+            let registry = Arc::new(registry);
 
-            let pipeline = SftPipeline::new(config, client)?;
+            let pipeline = SftPipeline::new(config, registry)?;
             let problems_data = SftPipeline::load_problems(&problems)?;
 
             // Setup checkpoint manager if requested
@@ -320,10 +321,10 @@ async fn main() -> Result<()> {
                 }
             }
 
-            // Get OpenRouter client (for now, all models use openrouter by default)
-            let client = registry.openrouter().clone();
+            // Pass registry to pipeline (supports multiple endpoints)
+            let registry = Arc::new(registry);
 
-            let pipeline = DpoPipeline::new(config, client)?;
+            let pipeline = DpoPipeline::new(config, registry)?;
             let problems_data = DpoPipeline::load_problems(&problems)?;
 
             // Setup checkpoint manager if requested

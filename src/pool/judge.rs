@@ -7,7 +7,7 @@
 //! - B_i(HIGH): Ensemble consensus → higher confidence via multiple judges
 //! - I^R: Judge prompt, threshold, and ensemble config are configurable
 
-use crate::client::OpenRouterClient;
+use crate::client::EndpointRegistry;
 use crate::models::{
     AggregationStrategy, Confidence, EnsembleConfig, EnsembleJudgeResult, EpistemeError,
     JudgeResult, ModelSpec, Result, Sample, Verdict,
@@ -28,8 +28,8 @@ use tracing::{debug, info, warn};
 /// 2. Ensemble: Multiple judges evaluate each sample, scores aggregated
 /// 3. Hierarchical: Cheap judge first, ensemble only if uncertain
 pub struct JudgePool {
-    /// OpenRouter client (shared)
-    client: Arc<OpenRouterClient>,
+    /// Endpoint registry (provides access to all configured LLM clients)
+    registry: Arc<EndpointRegistry>,
     /// Available models for judging
     models: Vec<ModelSpec>,
     /// Judge prompt template
@@ -51,7 +51,7 @@ pub struct JudgePool {
 impl JudgePool {
     /// Create a new judge pool.
     pub fn new(
-        client: Arc<OpenRouterClient>,
+        registry: Arc<EndpointRegistry>,
         models: Vec<ModelSpec>,
         judge_prompt: String,
         pool_size: usize,
@@ -60,7 +60,7 @@ impl JudgePool {
     ) -> Self {
         let total_weight: u32 = models.iter().map(|m| m.weight).sum();
         Self {
-            client,
+            registry,
             models,
             judge_prompt,
             pool_size,
@@ -309,8 +309,15 @@ Please evaluate this sample according to the criteria and provide:
         let start = Instant::now();
         let user_prompt = Self::build_judge_user_prompt(sample);
 
-        let response = self
-            .client
+        // Get the appropriate client for this model's endpoint
+        let client = self.registry.get(&model.endpoint).ok_or_else(|| {
+            EpistemeError::Internal(format!(
+                "Endpoint '{}' not found in registry",
+                model.endpoint
+            ))
+        })?;
+
+        let response = client
             .complete_with_system(model, &self.judge_prompt, &user_prompt, None, Some(0.3))
             .await?;
 
@@ -353,7 +360,7 @@ Please evaluate this sample according to the criteria and provide:
         // Run N judges in parallel using different models for diversity
         let mut handles = Vec::with_capacity(num_judges);
         for _ in 0..num_judges {
-            let client = Arc::clone(&self.client);
+            let registry = Arc::clone(&self.registry);
             let model = self.select_model().clone();
             let judge_prompt = self.judge_prompt.clone();
             let sample_clone = sample.clone();
@@ -368,6 +375,14 @@ Please evaluate this sample according to the criteria and provide:
 
                 let inner_start = Instant::now();
                 let user_prompt = Self::build_judge_user_prompt(&sample_clone);
+
+                // Get the appropriate client for this model's endpoint
+                let client = registry.get(&model.endpoint).ok_or_else(|| {
+                    EpistemeError::Internal(format!(
+                        "Endpoint '{}' not found in registry",
+                        model.endpoint
+                    ))
+                })?;
 
                 let response = client
                     .complete_with_system(&model, &judge_prompt, &user_prompt, None, Some(0.3))
@@ -551,7 +566,7 @@ Please evaluate this sample according to the criteria and provide:
     /// Create a clone of this pool for spawning tasks.
     fn clone_for_task(&self) -> Self {
         Self {
-            client: Arc::clone(&self.client),
+            registry: Arc::clone(&self.registry),
             models: self.models.clone(),
             judge_prompt: self.judge_prompt.clone(),
             pool_size: self.pool_size,

@@ -1,12 +1,12 @@
 //! Worker pool for sample generation.
 //!
 //! Epistemic foundation:
-//! - K_i: Workers generate samples by calling OpenRouter
+//! - K_i: Workers generate samples by calling LLM endpoints
 //! - K_i: Multiple workers can run in parallel
 //! - B_i: Each generation may succeed or fail → Result
 //! - I^R: Model selection strategy is configurable
 
-use crate::client::OpenRouterClient;
+use crate::client::EndpointRegistry;
 use crate::models::{EpistemeError, ModelSpec, Problem, Result, Sample};
 use chrono::Utc;
 use regex::Regex;
@@ -20,8 +20,8 @@ use uuid::Uuid;
 /// Worker pool for parallel sample generation.
 #[allow(dead_code)]
 pub struct WorkerPool {
-    /// OpenRouter client (shared)
-    client: Arc<OpenRouterClient>,
+    /// Endpoint registry (provides access to all configured LLM clients)
+    registry: Arc<EndpointRegistry>,
     /// Available models with weights
     models: Vec<ModelSpec>,
     /// System prompt for generation
@@ -39,14 +39,14 @@ pub struct WorkerPool {
 impl WorkerPool {
     /// Create a new worker pool.
     pub fn new(
-        client: Arc<OpenRouterClient>,
+        registry: Arc<EndpointRegistry>,
         models: Vec<ModelSpec>,
         system_prompt: String,
         pool_size: usize,
     ) -> Self {
         let total_weight: u32 = models.iter().map(|m| m.weight).sum();
         Self {
-            client,
+            registry,
             models,
             system_prompt,
             pool_size,
@@ -113,13 +113,20 @@ impl WorkerPool {
         let model = self.select_model();
         let start = Instant::now();
 
+        // Get the appropriate client for this model's endpoint
+        let client = self.registry.get(&model.endpoint).ok_or_else(|| {
+            EpistemeError::Internal(format!(
+                "Endpoint '{}' not found in registry",
+                model.endpoint
+            ))
+        })?;
+
         let user_prompt = format!(
             "Solve the following problem:\n\n{}\n\nProvide your reasoning and final answer.",
             problem.input
         );
 
-        let response = self
-            .client
+        let response = client
             .complete_with_system(model, &self.system_prompt, &user_prompt, None, None)
             .await?;
 
@@ -179,7 +186,7 @@ impl WorkerPool {
     /// Create a lightweight clone for spawning tasks.
     fn clone_for_task(&self) -> WorkerPoolHandle {
         WorkerPoolHandle {
-            client: Arc::clone(&self.client),
+            registry: Arc::clone(&self.registry),
             models: self.models.clone(),
             system_prompt: self.system_prompt.clone(),
             semaphore: Arc::clone(&self.semaphore),
@@ -191,7 +198,7 @@ impl WorkerPool {
 
 /// Lightweight handle for spawned tasks.
 struct WorkerPoolHandle {
-    client: Arc<OpenRouterClient>,
+    registry: Arc<EndpointRegistry>,
     models: Vec<ModelSpec>,
     system_prompt: String,
     semaphore: Arc<Semaphore>,
@@ -229,13 +236,20 @@ impl WorkerPoolHandle {
         let model = self.select_model();
         let start = Instant::now();
 
+        // Get the appropriate client for this model's endpoint
+        let client = self.registry.get(&model.endpoint).ok_or_else(|| {
+            EpistemeError::Internal(format!(
+                "Endpoint '{}' not found in registry",
+                model.endpoint
+            ))
+        })?;
+
         let user_prompt = format!(
             "Solve the following problem:\n\n{}\n\nProvide your reasoning and final answer.",
             problem.input
         );
 
-        let response = self
-            .client
+        let response = client
             .complete_with_system(model, &self.system_prompt, &user_prompt, None, None)
             .await?;
 
