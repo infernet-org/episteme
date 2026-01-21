@@ -547,11 +547,6 @@ episteme/
 | `OPENROUTER_API_KEY` | API authentication | K_i after first successful request |
 | `RUST_LOG` | Log verbosity | Set to `debug` for full K_i visibility |
 
-## Related Projects
-
-- **[EAE](https://github.com/infernet-org/eae)** - Epistemic Agentic Engineering framework (methodology source)
-- **[eae-skills](https://github.com/infernet-org/eae-skills)** - OpenCode skills for epistemic reasoning
-
 ## License
 
 Apache-2.0
